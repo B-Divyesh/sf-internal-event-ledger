@@ -13,7 +13,7 @@ const state = {
   view: routeView(), sources: [] as Source[], events: [] as EventItem[], digest: null as Digest|null,
   selectedSource: '', status: 'active', search: '', loading: true, error: '', online: navigator.onLine,
   openEvent: '', selected: new Set<string>(), credential: null as null|{alias:string;token:string;path:string},
-  pro: false, licenseNotice: '', digestHour: '09:00',
+  pro: false, licenseNotice: '', digestHour: '09:00', digestHours: 24,
 };
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -115,7 +115,7 @@ function sourcesView():string {
   body+=`<section class="panel"><div class="panel-head"><div><h2>Add a source</h2><p>Tokens are generated locally by this server. A signing secret makes HMAC-SHA256 mandatory.</p></div>${capReached?'<span class="badge">Free limit reached</span>':''}</div>
     ${capReached?`<p>You have five active routes. The one-time Pro unlock adds unlimited sources; existing sources and all exports remain available.</p><button class="button primary" data-route="settings">View Pro unlock</button>`:`<form id="source-form" class="form-grid">
       <div class="field"><label for="source-name">Source name</label><input id="source-name" name="name" required maxlength="80" placeholder="Billing production"></div>
-      <div class="field"><label for="source-alias">Endpoint alias</label><input id="source-alias" name="alias" required minlength="2" maxlength="48" pattern="[a-z0-9-]+" placeholder="billing-prod" aria-describedby="alias-help"><p class="form-help" id="alias-help">Lowercase letters, numbers, and hyphens.</p></div>
+      <div class="field"><label for="source-alias">Endpoint alias</label><input id="source-alias" name="alias" required minlength="2" maxlength="48" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="billing-prod" aria-describedby="alias-help"><p class="form-help" id="alias-help">Lowercase letters, numbers, and hyphens.</p></div>
       <div class="field wide"><label for="signing-secret">HMAC signing secret <span class="form-help">(optional)</span></label><input id="signing-secret" name="signing_secret" type="password" autocomplete="new-password" placeholder="Shared with the sender"><p class="form-help">When set, send a hex digest as <code>X-Ledger-Signature: sha256=…</code>.</p></div>
       <div class="field"><label for="redact-headers">Redact headers</label><input id="redact-headers" name="redact_headers" placeholder="x-api-key, x-customer-email"><p class="form-help">Comma-separated, case-insensitive.</p></div>
       <div class="field"><label for="redact-paths">Redact body paths</label><input id="redact-paths" name="redact_paths" placeholder="user.email, payment.card"><p class="form-help">Dot-separated JSON object paths.</p></div>
@@ -126,7 +126,8 @@ function sourcesView():string {
 }
 
 function digestView():string {
-  const body=pageHead('Morning board / 03','Daily digest','A compact roll-up of active signals received in the last 24 hours.',`<div class="actions"><button class="button" id="copy-digest">Copy digest</button><button class="button" id="load-digest">Refresh</button></div>`);
+  const windowControl=state.pro?`<label class="field-label" for="digest-window">Window <select id="digest-window"><option value="6" ${state.digestHours===6?'selected':''}>6 hours</option><option value="12" ${state.digestHours===12?'selected':''}>12 hours</option><option value="24" ${state.digestHours===24?'selected':''}>24 hours</option><option value="72" ${state.digestHours===72?'selected':''}>3 days</option><option value="168" ${state.digestHours===168?'selected':''}>7 days</option></select></label>`:'';
+  const body=pageHead('Morning board / 03','Daily digest',`A compact roll-up of active signals received in the last ${state.digestHours} hours.`,`<div class="actions">${windowControl}<button class="button" id="copy-digest">Copy digest</button><button class="button" id="load-digest">Refresh</button></div>`);
   if(!state.digest) return body+`<div class="panel"><div class="skeleton"></div><div class="skeleton"></div></div>`;
   const d=state.digest;
   return body+`<section class="panel digest-grid"><div><div class="digest-number"><strong>${d.total_occurrences}</strong><span>Arrivals / ${d.hours}h</span></div><p><strong>${d.unread_groups}</strong> unread groups remain.</p><p class="form-help">Generated ${new Date(d.generated_at).toLocaleString()}</p></div><div><h2>Review manifest</h2>${d.events.length?`<ol class="digest-list">${d.events.slice(0,30).map((e)=>`<li><strong>${escapeHtml(e.summary)}</strong><br><small>${escapeHtml(e.source_name)} · ${e.occurrence_count} occurrence${e.occurrence_count===1?'':'s'} · ${escapeHtml(e.status)}</small></li>`).join('')}</ol>`:`<p>No active signals arrived during this window. Quiet is a valid result.</p>`}</div></section>`;
@@ -177,14 +178,15 @@ function bind():void {
   const name=document.querySelector<HTMLInputElement>('#source-name'); const alias=document.querySelector<HTMLInputElement>('#source-alias');
   name?.addEventListener('input',()=>{if(alias && (!alias.value || alias.dataset.auto==='true')){alias.value=slugify(name.value);alias.dataset.auto='true';}});
   alias?.addEventListener('input',()=>{alias.dataset.auto='false';});
-  document.querySelector<HTMLFormElement>('#source-form')?.addEventListener('submit',(e)=>{e.preventDefault();void createSource(e.currentTarget);});
+  document.querySelector<HTMLFormElement>('#source-form')?.addEventListener('submit',(e)=>{e.preventDefault();void createSource(e.currentTarget as HTMLFormElement);});
   document.querySelectorAll<HTMLButtonElement>('[data-delete-source]').forEach((el)=>el.addEventListener('click',()=>{if(confirm(`Remove ${el.dataset.sourceName} and all of its stored events? This cannot be undone.`))void deleteSource(el.dataset.deleteSource!);}));
   document.querySelector('#copy-curl')?.addEventListener('click',()=>void copyCurl());
   document.querySelector('#load-digest')?.addEventListener('click',()=>void loadDigest(true));
+  document.querySelector<HTMLSelectElement>('#digest-window')?.addEventListener('change',(event)=>{state.digestHours=Number((event.target as HTMLSelectElement).value);save('ledger:digest-window',String(state.digestHours));void loadDigest(true);});
   document.querySelector('#copy-digest')?.addEventListener('click',()=>void copyDigest());
-  document.querySelector<HTMLFormElement>('#settings-form')?.addEventListener('submit',(e)=>{e.preventDefault();void saveSettings(new FormData(e.currentTarget).get('digest_hour') as string);});
+  document.querySelector<HTMLFormElement>('#settings-form')?.addEventListener('submit',(e)=>{e.preventDefault();void saveSettings(new FormData(e.currentTarget as HTMLFormElement).get('digest_hour') as string);});
   document.querySelector('#run-retention')?.addEventListener('click',()=>void runRetention());
-  document.querySelector<HTMLFormElement>('#license-form')?.addEventListener('submit',(e)=>{e.preventDefault();void restoreLicense(new FormData(e.currentTarget).get('license') as string);});
+  document.querySelector<HTMLFormElement>('#license-form')?.addEventListener('submit',(e)=>{e.preventDefault();void restoreLicense(new FormData(e.currentTarget as HTMLFormElement).get('license') as string);});
   document.querySelector('#remove-license')?.addEventListener('click',removeLicense);
 }
 
@@ -219,7 +221,7 @@ async function deleteSource(id:string):Promise<void>{try{await api(`/api/sources
 
 async function copyCurl():Promise<void>{if(!state.credential)return;const command=`curl -X POST '${location.origin}${state.credential.path}' -H 'Content-Type: application/json' -H 'X-Ledger-Token: ${state.credential.token}' -d '{"type":"deploy.completed","summary":"Production deploy completed","version":"1.0.0"}'`;try{await navigator.clipboard.writeText(command);toast('cURL example copied.');}catch{state.error='Clipboard access was blocked. Select and copy the receiver URL and token above.';render();}}
 
-async function loadDigest(show=false):Promise<void>{if(show){state.digest=null;render();}try{state.digest=await api<Digest>('/api/digest?hours=24');}catch(error){state.error=(error as Error).message;}render();}
+async function loadDigest(show=false):Promise<void>{if(show){state.digest=null;render();}try{state.digest=await api<Digest>(`/api/digest?hours=${state.pro?state.digestHours:24}`);}catch(error){state.error=(error as Error).message;}render();}
 
 async function copyDigest():Promise<void>{if(!state.digest)return;const lines=[`Internal Event Ledger — ${state.digest.total_occurrences} arrivals / ${state.digest.hours}h`,`${state.digest.unread_groups} unread groups`,...state.digest.events.map((e)=>`• ${e.summary} — ${e.source_name} ×${e.occurrence_count} [${e.status}]`)];try{await navigator.clipboard.writeText(lines.join('\n'));toast('Digest copied.');}catch{state.error='Clipboard access was blocked by the browser.';render();}}
 
@@ -254,7 +256,9 @@ window.addEventListener('online',()=>{state.online=true;void refreshAll();});
 window.addEventListener('offline',()=>{state.online=false;render();});
 
 async function start():Promise<void>{
-  await initLicense();render();
+  await initLicense();
+  if(state.pro)state.digestHours=Math.min(168,Math.max(1,Number(stored('ledger:digest-window'))||24));
+  render();
   await Promise.all([loadSources(false),loadEvents(false),loadSettings(false)]);
   if(state.view==='digest')await loadDigest();else render();
   if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});

@@ -7,12 +7,19 @@ use tracing::info;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "internal_event_ledger=info,tower_http=info".into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "internal_event_ledger=info,tower_http=info".into()),
+        )
         .init();
 
-    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://ledger.db?mode=rwc".into());
+    let database_url =
+        env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://ledger.db?mode=rwc".into());
     let static_dir = PathBuf::from(env::var("STATIC_DIR").unwrap_or_else(|_| "dist".into()));
-    let port = env::var("PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(8080);
+    let port = env::var("PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8080);
     let pool = create_pool(&database_url).await?;
     let state = AppState { pool };
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
@@ -28,7 +35,9 @@ async fn shutdown_signal() {
     #[cfg(unix)]
     let terminate = async {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("signal handler").recv().await;
+            .expect("signal handler")
+            .recv()
+            .await;
     };
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
