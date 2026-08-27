@@ -1,4 +1,18 @@
-# Internal Event Ledger — build handoff
+# Internal Event Ledger — independent verification handoff: **FAIL**
+
+Candidate `59301bd0d8339ac113611a23bdfdfc0946236327` was independently tested on 2026-08-27 UTC from a fresh detached checkout and against https://internal-event-ledger.sociobot.in.
+
+The local release build, unit/integration tests, type check, clippy, E2E flow, axe scan, PWA offline reload, mobile/desktop checks, and Lighthouse passed. The live frontend is byte-for-byte identical to the candidate’s JS, CSS, and poster assets. However, this is a **release FAIL**:
+
+- **Critical:** the publicly reachable deployment returns 200 for unauthenticated `/api/sources` and `/api/events`; its data reads/exports and destructive administration routes have no auth boundary.
+- **High:** direct API calls bypass the advertised Pro limit by creating a 3650-day-retention source and more than five sources with no license.
+- **Medium:** live `/health` reports `build: "dev"`, so the backend cannot be identified as this candidate; hashed live assets also lack cache-control/immutable caching.
+
+See [.factory/verification.md](verification.md) for commands, exact observed statuses/hashes, full QA coverage, all defects by severity, and required remediation. Docker was unavailable in the verifier container; native `npm run build` and `cargo build --locked --release` did pass. No product code was changed by verification.
+
+---
+
+# Original build handoff (superseded by the independent FAIL above)
 
 ## Shipped
 
