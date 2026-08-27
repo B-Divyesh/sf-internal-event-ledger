@@ -1,0 +1,9 @@
+{
+  "name": "Internal Event Ledger",
+  "short_name": "Event Ledger",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3e9d2",
+  "theme_color": "#10242d",
+  "icons": []
+}
