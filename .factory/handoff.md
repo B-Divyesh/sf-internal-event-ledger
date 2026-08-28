@@ -43,7 +43,7 @@ Executed from a clean `npm ci` installation on 2026-08-28 UTC:
 
 - ACR build `ch89` succeeded for immutable image `sociobotregistry.azurecr.io/sf-internal-event-ledger:6527359b84212aab696f35d3274872326462782d`, with that SHA supplied as Docker `BUILD_SHA`.
 - The existing factory Container App was updated to that image with a newly generated `admin-token` secret referenced only at runtime as `ADMIN_TOKEN`; the secret value was not written to source control or this handoff.
-- Live URL `https://internal-event-ledger.sociobot.in` returned `{"build":"6527359b84212aab696f35d3274872326462782d","status":"ok"}` from `/health`. Public `/api/sources` returned 401. The live hashed Vite JS returned `Cache-Control: public, max-age=31536000, immutable`; live `/sw.js` returned `no-cache`.
+- Live URL `https://internal-event-ledger.sociobot.in` returned `{"build":"6527359b84212aab696f35d3274872326462782d","status":"ok"}` from `/health`. Unauthenticated live reads (`/api/sources`, `/api/events`, CSV export) and source-create, event-patch, source-delete, and retention-post requests each returned 401. The live hashed Vite JS returned `Cache-Control: public, max-age=31536000, immutable`; live `/sw.js` returned `no-cache`.
 - A fresh live Playwright 390px check on the access boundary found one h1, no horizontal overflow, zero console/page errors, and zero Axe WCAG 2 A/AA, WCAG 2.1 AA, and best-practice violations.
 
 ## Known operational notes
