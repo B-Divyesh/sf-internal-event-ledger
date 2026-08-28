@@ -1,5 +1,5 @@
 import './styles.css';
-import { escapeHtml, parseJson, relativeTime, slugify } from './lib';
+import { escapeHtml, isPublicLegalView, parseJson, relativeTime, slugify } from './lib';
 
 type Source = { id:string; name:string; alias:string; redact_headers:string; redact_paths:string; retention_days:number; created_at:string; event_count:number; unread_count:number };
 type EventItem = { id:string; source_id:string; source_name:string; source_alias:string; fingerprint:string; event_type:string; summary:string; payload_json:string; headers_json:string; status:'unread'|'acknowledged'|'archived'; occurrence_count:number; received_at:string; last_seen_at:string };
@@ -158,7 +158,7 @@ function legalView(kind:'privacy'|'terms'):string {
 }
 
 function render():void {
-  if(state.accessRequired) { app.innerHTML=accessView(); bindAccess(); return; }
+  if(state.accessRequired && !isPublicLegalView(state.view)) { app.innerHTML=accessView(); bindAccess(); return; }
   let content='';
   if(state.view==='inbox') content=inboxView();
   else if(state.view==='sources') content=sourcesView();

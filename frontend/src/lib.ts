@@ -19,3 +19,7 @@ export function slugify(value: string): string {
 export function parseJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
 }
+
+export function isPublicLegalView(value: string): boolean {
+  return value === 'privacy' || value === 'terms';
+}
