@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, FromRow, SqlitePool};
-use std::{collections::HashSet, path::PathBuf};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use subtle::ConstantTimeEq;
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::GlobalKeyExtractor, GovernorLayer,
@@ -32,6 +32,20 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
+    admin_token: Arc<str>,
+    billing_api_base: Arc<str>,
+    http: reqwest::Client,
+}
+
+impl AppState {
+    pub fn new(pool: SqlitePool, admin_token: String, billing_api_base: String) -> Self {
+        Self {
+            pool,
+            admin_token: Arc::from(admin_token),
+            billing_api_base: Arc::from(billing_api_base.trim_end_matches('/').to_owned()),
+            http: reqwest::Client::new(),
+        }
+    }
 }
 
 pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
@@ -62,7 +76,12 @@ pub fn app(state: AppState, static_dir: PathBuf) -> Router {
         .route("/digest", get(digest))
         .route("/export", get(export_events))
         .route("/settings", get(get_settings).put(update_settings))
-        .route("/maintenance/retention", post(run_retention));
+        .route("/maintenance/retention", post(run_retention))
+        .route(
+            "/license",
+            get(get_license).put(update_license).delete(remove_license),
+        )
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
     Router::new()
         .route("/health", get(health))
         .merge(ingest_routes)
@@ -79,7 +98,13 @@ pub fn app(state: AppState, static_dir: PathBuf) -> Router {
 }
 
 async fn security_headers(req: Request<Body>, next: Next) -> Response {
+    let path = req.uri().path().to_owned();
     let mut response = next.run(req).await;
+    let is_html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
     let h = response.headers_mut();
     h.insert(
         "x-content-type-options",
@@ -92,7 +117,65 @@ async fn security_headers(req: Request<Body>, next: Next) -> Response {
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
     h.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.sociobot.in; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://api.sociobot.in"));
+    let cache_control = if path.starts_with("/api/")
+        || path.starts_with("/ingest/")
+        || path == "/health"
+    {
+        "no-store"
+    } else if path == "/sw.js" || path == "/" || path == "/privacy" || path == "/terms" || is_html {
+        "no-cache"
+    } else if is_hashed_asset(&path) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=86400"
+    };
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
     response
+}
+
+fn is_hashed_asset(path: &str) -> bool {
+    let Some(file_name) = path.rsplit('/').next() else {
+        return false;
+    };
+    let Some(stem) = file_name.rsplit_once('.').map(|(stem, _)| stem) else {
+        return false;
+    };
+    let Some((_, hash)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    hash.len() >= 8
+        && hash
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+async fn require_admin(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let provided = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or_default();
+    if provided
+        .as_bytes()
+        .ct_eq(s.admin_token.as_bytes())
+        .unwrap_u8()
+        != 1
+    {
+        return ApiError(
+            StatusCode::UNAUTHORIZED,
+            "Administrator authentication is required for ledger data and settings.".into(),
+        )
+        .into_response();
+    }
+    next.run(request).await
 }
 
 #[derive(Debug)]
@@ -180,6 +263,24 @@ async fn create_source(
             StatusCode::BAD_REQUEST,
             "Retention must be between 1 and 3650 days.".into(),
         ));
+    }
+    let pro = has_valid_server_license(&s).await?;
+    if !pro && retention > 30 {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "The free plan supports retention from 1 to 30 days. Add a valid Pro license to use longer retention.".into(),
+        ));
+    }
+    if !pro {
+        let source_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sources")
+            .fetch_one(&s.pool)
+            .await?;
+        if source_count >= 5 {
+            return Err(ApiError(
+                StatusCode::FORBIDDEN,
+                "The free plan supports up to five sources. Add a valid Pro license to create another source.".into(),
+            ));
+        }
     }
     let mut raw = [0u8; 24];
     rand::rng().fill_bytes(&mut raw);
@@ -452,7 +553,19 @@ async fn digest(
     State(s): State<AppState>,
     Query(q): Query<DigestQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let hours = q.hours.unwrap_or(24).clamp(1, 168);
+    let hours = q.hours.unwrap_or(24);
+    if !(1..=168).contains(&hours) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Digest window must be between 1 and 168 hours.".into(),
+        ));
+    }
+    if hours != 24 && !has_valid_server_license(&s).await? {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Custom digest windows require a valid Pro license. The free daily digest remains available.".into(),
+        ));
+    }
     let since = (Utc::now() - Duration::hours(hours)).to_rfc3339();
     let rows=sqlx::query_as::<_,EventView>(r#"SELECT e.id,e.source_id,s.name source_name,s.alias source_alias,e.fingerprint,e.event_type,e.summary,e.payload_json,e.headers_json,e.status,e.occurrence_count,e.received_at,e.last_seen_at FROM events e JOIN sources s ON s.id=e.source_id WHERE e.last_seen_at>=? AND e.status!='archived' ORDER BY e.occurrence_count DESC,e.last_seen_at DESC"#).bind(&since).fetch_all(&s.pool).await?;
     let total: i64 = rows.iter().map(|e| e.occurrence_count).sum();
@@ -561,7 +674,137 @@ async fn run_retention(State(s): State<AppState>) -> Result<Json<Value>, ApiErro
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({"status":"ok","build":option_env!("BUILD_SHA").unwrap_or("dev")}))
+    Json(json!({"status":"ok","build":env!("BUILD_SHA")}))
+}
+
+#[derive(Deserialize)]
+struct LicenseUpdate {
+    license: String,
+}
+
+#[derive(Deserialize)]
+struct LicenseVerdict {
+    valid: bool,
+}
+
+async fn get_license(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let pro = has_valid_server_license(&s).await?;
+    Ok(Json(json!({"pro": pro})))
+}
+
+async fn update_license(
+    State(s): State<AppState>,
+    Json(input): Json<LicenseUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    let token = input.license.trim();
+    if token.is_empty() || token.len() > 4096 {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Paste a valid license token.".into(),
+        ));
+    }
+    let verdict = verify_license(&s, token).await?;
+    if !verdict {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "That license is not active for Internal Event Ledger.".into(),
+        ));
+    }
+    set_setting(&s.pool, "license_token", token).await?;
+    set_setting(&s.pool, "license_valid", "true").await?;
+    set_setting(
+        &s.pool,
+        "license_checked_at",
+        &Utc::now().timestamp().to_string(),
+    )
+    .await?;
+    Ok(Json(
+        json!({"pro":true,"notice":"License verified by this server."}),
+    ))
+}
+
+async fn remove_license(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
+    sqlx::query(
+        "DELETE FROM settings WHERE key IN ('license_token','license_valid','license_checked_at')",
+    )
+    .execute(&s.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn has_valid_server_license(s: &AppState) -> Result<bool, ApiError> {
+    let Some(token) = get_setting(&s.pool, "license_token").await? else {
+        return Ok(false);
+    };
+    let checked_at = get_setting(&s.pool, "license_checked_at")
+        .await?
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    let cached_valid = get_setting(&s.pool, "license_valid").await?.as_deref() == Some("true");
+    if cached_valid && Utc::now().timestamp() - checked_at < 86_400 {
+        return Ok(true);
+    }
+    let valid = verify_license(s, &token).await.unwrap_or(false);
+    set_setting(
+        &s.pool,
+        "license_valid",
+        if valid { "true" } else { "false" },
+    )
+    .await?;
+    set_setting(
+        &s.pool,
+        "license_checked_at",
+        &Utc::now().timestamp().to_string(),
+    )
+    .await?;
+    Ok(valid)
+}
+
+async fn verify_license(s: &AppState, token: &str) -> Result<bool, ApiError> {
+    let endpoint = format!("{}/verify", s.billing_api_base);
+    let response = s
+        .http
+        .get(endpoint)
+        .query(&[("license", token)])
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "license verification request failed");
+            ApiError(
+                StatusCode::BAD_GATEWAY,
+                "Could not verify the license right now.".into(),
+            )
+        })?;
+    if !response.status().is_success() {
+        return Err(ApiError(
+            StatusCode::BAD_GATEWAY,
+            "Could not verify the license right now.".into(),
+        ));
+    }
+    let verdict = response.json::<LicenseVerdict>().await.map_err(|error| {
+        tracing::warn!(%error, "license verification response was invalid");
+        ApiError(
+            StatusCode::BAD_GATEWAY,
+            "Could not verify the license right now.".into(),
+        )
+    })?;
+    Ok(verdict.valid)
+}
+
+async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, ApiError> {
+    Ok(sqlx::query_scalar("SELECT value FROM settings WHERE key=?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?)
+}
+
+async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<(), ApiError> {
+    sqlx::query("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -621,6 +864,44 @@ mod tests {
     use axum::http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    fn test_state(pool: SqlitePool) -> AppState {
+        AppState::new(
+            pool,
+            "test-administrator-token".into(),
+            "http://127.0.0.1:9/unreachable".into(),
+        )
+    }
+
+    fn admin(request: axum::http::request::Builder) -> axum::http::request::Builder {
+        request.header("authorization", "Bearer test-administrator-token")
+    }
+
+    async fn new_test_router() -> (Router, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!("ledger-test-{}.db", Uuid::new_v4()));
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let pool = create_pool(&url).await.unwrap();
+        (app(test_state(pool), std::env::temp_dir()), path)
+    }
+
+    async fn create_test_source(router: &Router, alias: &str, retention_days: i64) -> Response {
+        router
+            .clone()
+            .oneshot(
+                admin(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/sources")
+                        .header("content-type", "application/json"),
+                )
+                .body(Body::from(format!(
+                    r#"{{"name":"{alias}","alias":"{alias}","retention_days":{retention_days}}}"#
+                )))
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
     #[test]
     fn signatures_are_checked() {
         let body = b"{\"ok\":true}";
@@ -643,18 +924,17 @@ mod tests {
     }
     #[tokio::test]
     async fn source_ingest_and_review_flow() {
-        let path = std::env::temp_dir().join(format!("ledger-test-{}.db", Uuid::new_v4()));
-        let url = format!("sqlite://{}?mode=rwc", path.display());
-        let pool = create_pool(&url).await.unwrap();
-        let router = app(AppState { pool }, std::env::temp_dir());
-        let create = Request::builder()
-            .method("POST")
-            .uri("/api/sources")
-            .header("content-type", "application/json")
-            .body(Body::from(
-                r#"{"name":"Deploys","alias":"deploys","redact_paths":["user.email"]}"#,
-            ))
-            .unwrap();
+        let (router, path) = new_test_router().await;
+        let create = admin(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sources")
+                .header("content-type", "application/json"),
+        )
+        .body(Body::from(
+            r#"{"name":"Deploys","alias":"deploys","redact_paths":["user.email"]}"#,
+        ))
+        .unwrap();
         let response = router.clone().oneshot(create).await.unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
         let created: Value =
@@ -666,8 +946,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let response = router
             .oneshot(
-                Request::builder()
-                    .uri("/api/events")
+                admin(Request::builder().uri("/api/events"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -683,5 +962,181 @@ mod tests {
             .unwrap()
             .contains("[REDACTED]"));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn administrator_authentication_protects_every_management_route() {
+        let (router, path) = new_test_router().await;
+        for request in [
+            Request::builder()
+                .uri("/api/sources")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .uri("/api/events")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .uri("/api/digest")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .uri("/api/export?format=csv")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .uri("/api/settings")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/sources")
+                .body(Body::from("{}"))
+                .unwrap(),
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/events/id")
+                .body(Body::from("{}"))
+                .unwrap(),
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/sources/id")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/maintenance/retention")
+                .body(Body::from("{}"))
+                .unwrap(),
+        ] {
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let response = create_test_source(&router, "protected-source", 30).await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn server_enforces_free_limits_and_honors_a_fresh_verified_license_cache() {
+        let (router, path) = new_test_router().await;
+        for index in 0..5 {
+            let response = create_test_source(&router, &format!("source-{index}"), 30).await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+        assert_eq!(
+            create_test_source(&router, "source-six", 30).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            create_test_source(&router, "long-retention", 31)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let digest = router
+            .clone()
+            .oneshot(
+                admin(Request::builder().uri("/api/digest?hours=6"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(digest.status(), StatusCode::FORBIDDEN);
+
+        let state = test_state(
+            create_pool(&format!("sqlite://{}?mode=rwc", path.display()))
+                .await
+                .unwrap(),
+        );
+        set_setting(&state.pool, "license_token", "server-verified-token")
+            .await
+            .unwrap();
+        set_setting(&state.pool, "license_valid", "true")
+            .await
+            .unwrap();
+        set_setting(
+            &state.pool,
+            "license_checked_at",
+            &Utc::now().timestamp().to_string(),
+        )
+        .await
+        .unwrap();
+        let licensed_router = app(state, std::env::temp_dir());
+        assert_eq!(
+            create_test_source(&licensed_router, "source-six", 3650)
+                .await
+                .status(),
+            StatusCode::CREATED
+        );
+        let digest = licensed_router
+            .clone()
+            .oneshot(
+                admin(Request::builder().uri("/api/digest?hours=6"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(digest.status(), StatusCode::OK);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn cache_policy_marks_hashed_assets_immutable_and_shell_revalidates() {
+        assert!(is_hashed_asset("/assets/index-Abc12345.js"));
+        assert!(!is_hashed_asset("/assets/dispatch-hall.webp"));
+        let (_router, database_path) = new_test_router().await;
+        let cache_path = std::env::temp_dir().join(format!("ledger-static-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(cache_path.join("assets")).unwrap();
+        std::fs::write(
+            cache_path.join("index.html"),
+            "<!doctype html><title>Ledger</title>",
+        )
+        .unwrap();
+        std::fs::write(
+            cache_path.join("assets/index-Abc12345.js"),
+            "console.log('ledger')",
+        )
+        .unwrap();
+        std::fs::write(cache_path.join("sw.js"), "// worker").unwrap();
+        let url = format!("sqlite://{}?mode=rwc", database_path.display());
+        let static_router = app(
+            test_state(create_pool(&url).await.unwrap()),
+            cache_path.clone(),
+        );
+        let shell = static_router
+            .clone()
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(shell.headers()[header::CACHE_CONTROL], "no-cache");
+        let asset = static_router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/index-Abc12345.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            asset.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        let worker = static_router
+            .oneshot(
+                Request::builder()
+                    .uri("/sw.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(worker.headers()[header::CACHE_CONTROL], "no-cache");
+        let _ = std::fs::remove_dir_all(cache_path);
+        let _ = std::fs::remove_file(database_path);
     }
 }

@@ -2,6 +2,7 @@
 name = "internal-event-ledger"
 version = "1.0.0"
 edition = "2021"
+build = "build.rs"
 
 [dependencies]
 anyhow = "1.0"
@@ -10,6 +11,7 @@ chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 hmac = "0.12"
 rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use internal_event_ledger::{app, create_pool, AppState};
 use std::{env, net::SocketAddr, path::PathBuf};
 use tokio::net::TcpListener;
@@ -20,8 +21,14 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(8080);
+    let admin_token = env::var("ADMIN_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+        .context("ADMIN_TOKEN is required; generate a high-entropy administrator token before starting the ledger")?;
+    let billing_api_base = env::var("BILLING_API_BASE")
+        .unwrap_or_else(|_| "https://api.sociobot.in/api/v1/products/internal-event-ledger".into());
     let pool = create_pool(&database_url).await?;
-    let state = AppState { pool };
+    let state = AppState::new(pool, admin_token, billing_api_base);
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
     info!(port, "ledger ready");
     axum::serve(listener, app(state, static_dir))

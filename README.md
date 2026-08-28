@@ -8,19 +8,21 @@ This is not a pager, retrying webhook proxy, automation engine, or guaranteed-de
 
 ## Run with Docker
 
-The smallest deployment uses the included Compose file and a persistent SQLite volume:
+The smallest deployment uses the included Compose file and a persistent SQLite volume. Generate a long random administrator token and record the commit being deployed first; both values are mandatory:
 
 ```sh
+export ADMIN_TOKEN="$(openssl rand -hex 32)"
+export BUILD_SHA="$(git rev-parse HEAD)"
 docker compose up --build -d
 ```
 
-Open `http://localhost:8080`. The container runs as a non-root user and stores its database at `/data/ledger.db`.
+Open `http://localhost:8080`. The container runs as a non-root user and stores its database at `/data/ledger.db`. On first visit, enter `ADMIN_TOKEN` in the Administrator access screen. It is retained only for that browser tab.
 
 To build and run the image directly:
 
 ```sh
-docker build -t internal-event-ledger .
-docker run --rm -p 8080:8080 -v ledger-data:/data internal-event-ledger
+docker build --build-arg BUILD_SHA="$(git rev-parse HEAD)" -t internal-event-ledger .
+docker run --rm -e ADMIN_TOKEN="$(openssl rand -hex 32)" -p 8080:8080 -v ledger-data:/data internal-event-ledger
 ```
 
 ## Develop and verify
@@ -40,7 +42,7 @@ For a production-like local run:
 
 ```sh
 npm run build
-DATABASE_URL='sqlite://ledger.db?mode=rwc' cargo run --release
+ADMIN_TOKEN='local-development-token' DATABASE_URL='sqlite://ledger.db?mode=rwc' cargo run --release
 ```
 
 Configuration is environment-only:
@@ -51,7 +53,9 @@ Configuration is environment-only:
 | `DATABASE_URL` | `sqlite://ledger.db?mode=rwc` | SQLite location |
 | `STATIC_DIR` | `dist` | Built frontend location |
 | `RUST_LOG` | JSON info logs | Tracing filter |
-| `BUILD_SHA` | `dev` | Value reported by `/health` when set at compile time |
+| `ADMIN_TOKEN` | required | High-entropy token required for all administrative browser and API access |
+| `BILLING_API_BASE` | Sociobot production API | Server-side Pro license verification endpoint (override for staging) |
+| `BUILD_SHA` | `dev` for native development | Compile-time `/health` identity; mandatory for container builds |
 
 ## Receive events
 
@@ -75,13 +79,13 @@ Credential headers (`Authorization`, `Cookie`, ledger token, and signature) are 
 - `GET /api/export?format=json` and `?format=csv` export the complete current record and are never paywalled.
 - `GET /health` returns service status and build SHA.
 
-The free tier supports five sources and 30-day source retention in the UI. A $39 one-time Pro license unlocks unlimited sources, longer retention, and custom digest windows. Checkout and verification use only the Sociobot billing API; no payment provider is embedded.
+All management APIs, exports, event review, settings, retention, and licensing require `Authorization: Bearer $ADMIN_TOKEN`; receiver ingestion continues to use each source’s separate receiver token. The free tier supports five sources and 30-day source retention. A $39 one-time Pro license unlocks unlimited sources, longer retention, and custom digest windows. These limits are enforced by the server for direct API requests as well as the UI. When an administrator applies a license in Settings, the server verifies it with Sociobot and caches the verdict for up to 24 hours; an unavailable or invalid verification safely falls back to free limits. Checkout and verification use only the Sociobot billing API; no payment provider is embedded.
 
 ## Privacy and security
 
-There are no analytics, trackers, third-party fonts, or runtime CDN assets. Operational data stays in the deployment’s SQLite database. The browser only stores a Sociobot license token/verdict when Pro is used. Read the in-product `/privacy` and `/terms` pages for the full notices.
+There are no analytics, trackers, third-party fonts, or runtime CDN assets. Operational data stays in the deployment’s SQLite database. A restored license is retained in browser local storage and, when applied, in the server database so the server can perform its daily verification. Read the in-product `/privacy` and `/terms` pages for the full notices.
 
-Back up the `/data` volume, place the service behind HTTPS, and restrict administrative UI access at your reverse proxy when exposing it outside a trusted network. Ingest endpoints have individual high-entropy tokens; HMAC is recommended when the sender supports it.
+Back up the `/data` volume and place the service behind HTTPS. The application itself enforces an administrator boundary; a reverse-proxy identity layer can be added as defense in depth. Ingest endpoints have individual high-entropy tokens; HMAC is recommended when the sender supports it. Hashed frontend assets are immutable-cached, HTML and `sw.js` revalidate, and a build-versioned worker immediately activates and reloads controlled clients after an update.
 
 ## License
 

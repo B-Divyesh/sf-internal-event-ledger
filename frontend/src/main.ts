@@ -7,13 +7,15 @@ type Digest = { hours:number; generated_at:string; total_occurrences:number; unr
 type View = 'inbox'|'sources'|'digest'|'settings'|'privacy'|'terms';
 
 const LICENSE_KEY = 'sb_license:internal-event-ledger';
-const VERDICT_KEY = `${LICENSE_KEY}:verdict`;
+const ADMIN_TOKEN_KEY = 'iel:admin-token';
 const BILLING = 'https://api.sociobot.in/api/v1/products/internal-event-ledger';
+const BUILD_SHA = __BUILD_SHA__;
 const state = {
   view: routeView(), sources: [] as Source[], events: [] as EventItem[], digest: null as Digest|null,
   selectedSource: '', status: 'active', search: '', loading: true, error: '', online: navigator.onLine,
   openEvent: '', selected: new Set<string>(), credential: null as null|{alias:string;token:string;path:string},
-  pro: false, licenseNotice: '', digestHour: '09:00', digestHours: 24,
+  pro: false, licenseNotice: '', digestHour: '09:00', digestHours: 24, accessRequired: !sessionStored(ADMIN_TOKEN_KEY),
+  adminToken: sessionStored(ADMIN_TOKEN_KEY) || '',
 };
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -26,14 +28,21 @@ function routeView(): View {
 }
 
 async function api<T>(url:string, options?:RequestInit):Promise<T> {
-  const response = await fetch(url, { ...options, headers: { 'content-type':'application/json', ...(options?.headers || {}) } });
+  const response = await fetch(url, { ...options, headers: { 'content-type':'application/json', ...(state.adminToken ? {authorization:`Bearer ${state.adminToken}`} : {}), ...(options?.headers || {}) } });
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as {error?:string};
-    throw new Error(body.error || `Request failed (${response.status})`);
+    throw new ApiRequestError(response.status, body.error || `Request failed (${response.status})`);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
+
+class ApiRequestError extends Error { constructor(readonly status:number, message:string){super(message);} }
+function messageFor(error:unknown):string {
+  if (error instanceof ApiRequestError && error.status===401) { state.accessRequired=true; return 'Administrator authentication is required.'; }
+  return (error as Error).message;
+}
+function sessionStored(key:string):string|null{try{return sessionStorage.getItem(key);}catch{return null;}}
 
 function layout(content:string):string {
   const unread = state.events.filter((e) => e.status === 'unread').length;
@@ -81,7 +90,7 @@ function inboxView():string {
   body += `<div class="toolbar" aria-label="Event filters">
     <div class="field search-field"><label for="search">Search the ledger</label><input id="search" type="search" value="${escapeHtml(state.search)}" placeholder="Summary, type, or payload" autocomplete="off"></div>
     <div class="field"><label for="status-filter">Review state</label><select id="status-filter"><option value="active" ${state.status==='active'?'selected':''}>Active</option><option value="unread" ${state.status==='unread'?'selected':''}>Unread</option><option value="acknowledged" ${state.status==='acknowledged'?'selected':''}>Acknowledged</option><option value="archived" ${state.status==='archived'?'selected':''}>Archived</option><option value="all" ${state.status==='all'?'selected':''}>All events</option></select></div>
-    <div class="actions"><button class="button" id="refresh">Refresh</button><a class="button" href="/api/export?format=csv" download>Export CSV</a><a class="button" href="/api/export?format=json" download>Export JSON</a></div>
+    <div class="actions"><button class="button" id="refresh">Refresh</button><button class="button" id="export-csv">Export CSV</button><button class="button" id="export-json">Export JSON</button></div>
   </div>`;
   if(state.loading) return body+`<div class="event-list" aria-label="Loading events"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>`;
   if(!state.events.length && !state.search && !state.selectedSource) return body+emptyState();
@@ -137,18 +146,19 @@ function settingsView():string {
   const buy=`${BILLING}/checkout`;
   let body=pageHead('Station office / 04','Settings & license','Set the review rhythm, run retention, or unlock capacity without changing the core ledger.');
   body+=`<section class="panel"><div class="panel-head"><div><h2>Digest rhythm</h2><p>The ledger exposes this saved time for a host scheduler or your own morning routine; it does not send email.</p></div></div><form id="settings-form" class="form-grid"><div class="field"><label for="digest-hour">Daily review time</label><input id="digest-hour" type="time" name="digest_hour" value="${escapeHtml(state.digestHour)}"></div><div class="actions"><button class="button primary" type="submit">Save review time</button><button class="button" type="button" id="run-retention">Run retention now</button></div></form></section>`;
-  body+=`<section class="panel pro-banner"><div class="panel-head"><div><p class="eyebrow">Permanent route permit</p><h2>${state.pro?'Pro is active':'Unlock Pro'}</h2><p>${state.pro?'This browser has a verified Internal Event Ledger license.':'Keep five sources free forever. Pro adds unlimited sources, up to 10-year retention, and custom digest windows.'}</p></div><div class="price">$39 <small>once</small></div></div>${state.licenseNotice?`<p role="status">${escapeHtml(state.licenseNotice)}</p>`:''}<div class="actions">${state.pro?'<span class="badge acknowledged">License active</span>':`<a class="button primary" href="${buy}">Buy Pro once</a>`}</div><form id="license-form" class="form-grid" style="margin-top:20px"><div class="field wide"><label for="license-token">Have a license? Paste it here</label><input id="license-token" name="license" autocomplete="off" spellcheck="false" placeholder="License token"></div><div class="wide actions"><button class="button" type="submit">Verify license</button>${localStorage.getItem(LICENSE_KEY)?'<button class="button danger" type="button" id="remove-license">Remove from this browser</button>':''}</div></form><p class="form-help">One-time purchase. Sociobot/Dodo is the merchant of record and handles refunds; refunded licenses are revoked automatically. <a href="/privacy" data-legal="privacy">Privacy</a> · <a href="/terms" data-legal="terms">Terms</a></p></section>`;
-  body+=`<section class="panel"><h2>Privacy controls</h2><p>Events stay in your SQLite database. Receiver credentials are stripped before headers are stored. Export remains available on every tier.</p><div class="actions"><a class="button" href="/api/export?format=json" download>Export all JSON</a><a class="button" href="/privacy" data-legal="privacy">Read privacy policy</a></div></section>`;
+  body+=`<section class="panel pro-banner"><div class="panel-head"><div><p class="eyebrow">Permanent route permit</p><h2>${state.pro?'Pro is active':'Unlock Pro'}</h2><p>${state.pro?'This server has a verified Internal Event Ledger license.':'Keep five sources free forever. Pro adds unlimited sources, up to 10-year retention, and custom digest windows.'}</p></div><div class="price">$39 <small>once</small></div></div>${state.licenseNotice?`<p role="status">${escapeHtml(state.licenseNotice)}</p>`:''}<div class="actions">${state.pro?'<span class="badge acknowledged">License active</span>':`<a class="button primary" href="${buy}">Buy Pro once</a>`}</div><form id="license-form" class="form-grid" style="margin-top:20px"><div class="field wide"><label for="license-token">Have a license? Paste it here</label><input id="license-token" name="license" autocomplete="off" spellcheck="false" placeholder="License token"></div><div class="wide actions"><button class="button" type="submit">Verify and apply to this server</button>${localStorage.getItem(LICENSE_KEY)?'<button class="button danger" type="button" id="remove-license">Remove license</button>':''}</div></form><p class="form-help">The server verifies the license and caches its verdict for up to one day. One-time purchase. Sociobot/Dodo is the merchant of record and handles refunds; refunded licenses are revoked automatically. <a href="/privacy" data-legal="privacy">Privacy</a> · <a href="/terms" data-legal="terms">Terms</a></p></section>`;
+  body+=`<section class="panel"><h2>Privacy controls</h2><p>Events stay in your SQLite database. Receiver credentials are stripped before headers are stored. Export remains available on every tier.</p><div class="actions"><button class="button" id="export-json">Export all JSON</button><a class="button" href="/privacy" data-legal="privacy">Read privacy policy</a></div></section>`;
   return body;
 }
 
 function legalView(kind:'privacy'|'terms'):string {
-  const privacy=`${pageHead('Policy / P','Privacy','How a self-hosted ledger handles operational event data.')}<article class="legal"><p><strong>Effective 27 August 2026.</strong> Internal Event Ledger is self-hosted. Event bodies, selected headers, source configuration, acknowledgment state, and retention preferences are stored only in the SQLite database you operate.</p><h2>What is stored</h2><p>The receiver stores event JSON after configured body-path redaction, selected non-credential headers after header redaction, timestamps, fingerprints, and review state. Authentication tokens, authorization headers, cookies, and webhook signatures are never written into event records.</p><h2>Billing and licenses</h2><p>If you buy Pro, Sociobot and its merchant-of-record provider Dodo process checkout. This app stores the returned license token and a daily verification result in your browser’s local storage. It sends that token only to the Sociobot verification endpoint.</p><h2>Retention and control</h2><p>You choose retention by source, may run deletion at any time, may remove a source and all its events, and can export JSON or CSV. This product contains no analytics, advertising, tracking pixel, or third-party runtime script.</p><h2>Contact</h2><p>For product privacy questions, contact <a href="mailto:privacy@sociobot.in">privacy@sociobot.in</a>. For server access and deletion, contact the operator of your deployment.</p></article>`;
+  const privacy=`${pageHead('Policy / P','Privacy','How a self-hosted ledger handles operational event data.')}<article class="legal"><p><strong>Effective 28 August 2026.</strong> Internal Event Ledger is self-hosted. Event bodies, selected headers, source configuration, acknowledgment state, and retention preferences are stored only in the SQLite database you operate.</p><h2>What is stored</h2><p>The receiver stores event JSON after configured body-path redaction, selected non-credential headers after header redaction, timestamps, fingerprints, and review state. Authentication tokens, authorization headers, cookies, and webhook signatures are never written into event records.</p><h2>Billing and licenses</h2><p>If you buy Pro, Sociobot and its merchant-of-record provider Dodo process checkout. The returned license token is retained in browser local storage for restoration and, when you apply it, in the server database so the server can verify its status with Sociobot no more than once daily. It is never included in event records or exports.</p><h2>Retention and control</h2><p>You choose retention by source, may run deletion at any time, may remove a source and all its events, and can export JSON or CSV. This product contains no analytics, advertising, tracking pixel, or third-party runtime script.</p><h2>Contact</h2><p>For product privacy questions, contact <a href="mailto:privacy@sociobot.in">privacy@sociobot.in</a>. For server access and deletion, contact the operator of your deployment.</p></article>`;
   const terms=`${pageHead('Policy / T','Terms','Clear conditions for using and purchasing Internal Event Ledger.')}<article class="legal"><p><strong>Effective 27 August 2026.</strong> You may use and self-host this software under its MIT License. You are responsible for securing the deployment, configuring sender signatures and redaction, and ensuring you have permission to store submitted event data.</p><h2>Scope</h2><p>The product is a review ledger for non-urgent operational events. It is not an incident pager, guaranteed-delivery queue, backup system, or emergency service. Do not rely on it for life-safety or time-critical alerts.</p><h2>Pro purchase</h2><p>Pro is a $39 one-time license that unlocks unlimited sources, longer retention controls, and custom digest windows for this product. Sociobot/Dodo is the merchant of record. Checkout, receipts, taxes, and eligible refunds are handled there. A refund revokes the associated license.</p><h2>Availability and warranty</h2><p>The software is provided “as is,” without warranty. You control your self-hosted database and backups. Features may improve while purchased access to the stated Pro capabilities is honored for valid licenses.</p><h2>Fair use</h2><p>Do not use the receiver to collect data unlawfully, interfere with networks, or bypass another system’s access controls.</p></article>`;
   return kind==='privacy'?privacy:terms;
 }
 
 function render():void {
+  if(state.accessRequired) { app.innerHTML=accessView(); bindAccess(); return; }
   let content='';
   if(state.view==='inbox') content=inboxView();
   else if(state.view==='sources') content=sourcesView();
@@ -159,12 +169,22 @@ function render():void {
   bind();
 }
 
+function accessView():string {
+  return `<div class="shell access-shell"><main id="main" tabindex="-1"><section class="panel access-panel"><p class="eyebrow">Private control board</p><h1>Administrator access</h1><p>Enter the administrator token configured for this self-hosted ledger to review events, manage sources, and export records. It is kept only for this browser tab.</p>${state.error?`<div class="notice" role="alert">${escapeHtml(state.error)}</div>`:''}<form id="admin-access-form" class="form-grid"><div class="field wide"><label for="admin-token">Administrator token</label><input id="admin-token" name="token" type="password" required autocomplete="current-password"></div><div class="wide actions"><button class="button primary" type="submit">Unlock ledger</button></div></form><p class="form-help">Receiver endpoints continue to use their own private tokens. <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p></section></main></div>`;
+}
+
+function bindAccess():void {
+  document.querySelector<HTMLFormElement>('#admin-access-form')?.addEventListener('submit',(event)=>{event.preventDefault();const token=String(new FormData(event.currentTarget as HTMLFormElement).get('token')||'').trim();if(!token){state.error='Enter the administrator token.';render();return;}state.adminToken=token;state.accessRequired=false;state.error='';try{sessionStorage.setItem(ADMIN_TOKEN_KEY,token);}catch{/* current-tab access still works */}void refreshAll();render();});
+}
+
 function bind():void {
   document.querySelectorAll<HTMLElement>('[data-route]').forEach((el)=>el.addEventListener('click',(event)=>{event.preventDefault();navigate(el.dataset.route as View);}));
   document.querySelectorAll<HTMLElement>('[data-legal]').forEach((el)=>el.addEventListener('click',(event)=>{event.preventDefault();navigate(el.dataset.legal as View);}));
   document.querySelectorAll<HTMLButtonElement>('[data-source]').forEach((el)=>el.addEventListener('click',()=>{state.selectedSource=el.dataset.source||'';state.view='inbox';void loadEvents();}));
   document.querySelector('#retry')?.addEventListener('click',()=>void refreshAll());
   document.querySelector('#refresh')?.addEventListener('click',()=>void loadEvents(true));
+  document.querySelector('#export-csv')?.addEventListener('click',()=>void exportEvents('csv'));
+  document.querySelector('#export-json')?.addEventListener('click',()=>void exportEvents('json'));
   document.querySelector('#clear-filters')?.addEventListener('click',()=>{state.search='';state.selectedSource='';state.status='active';void loadEvents();});
   let searchTimer=0;
   document.querySelector<HTMLInputElement>('#search')?.addEventListener('input',(event)=>{state.search=(event.target as HTMLInputElement).value;window.clearTimeout(searchTimer);searchTimer=window.setTimeout(()=>void loadEvents(),250);});
@@ -198,36 +218,38 @@ function navigate(view:View):void {
   if(view==='digest'&&!state.digest)void loadDigest();
 }
 
-async function refreshAll():Promise<void>{ state.error='';await Promise.all([loadSources(false),loadEvents(false),loadSettings(false)]); }
+async function refreshAll():Promise<void>{ state.error='';await Promise.all([loadSources(false),loadEvents(false),loadSettings(false),loadLicense(false)]);render(); }
 
-async function loadSources(show=true):Promise<void>{ try{const data=await api<{sources:Source[]}>('/api/sources');state.sources=data.sources;}catch(error){state.error=(error as Error).message;}if(show)render(); }
+async function loadSources(show=true):Promise<void>{ try{const data=await api<{sources:Source[]}>('/api/sources');state.sources=data.sources;}catch(error){state.error=messageFor(error);}if(show)render(); }
 
 async function loadEvents(showLoading=false):Promise<void>{
   if(showLoading){state.loading=true;render();}
-  try{const params=new URLSearchParams();if(state.search)params.set('q',state.search);if(state.selectedSource)params.set('source',state.selectedSource);if(state.status!=='all'&&state.status!=='active')params.set('status',state.status);state.error='';const data=await api<{events:EventItem[]}>(`/api/events?${params}`);state.events=state.status==='active'?data.events.filter((e)=>e.status!=='archived'):data.events;state.selected=new Set([...state.selected].filter((id)=>state.events.some((e)=>e.id===id)));}catch(error){state.error=state.online?(error as Error).message:'You are offline. Reconnect to refresh the ledger.';}state.loading=false;render();
+  try{const params=new URLSearchParams();if(state.search)params.set('q',state.search);if(state.selectedSource)params.set('source',state.selectedSource);if(state.status!=='all'&&state.status!=='active')params.set('status',state.status);state.error='';const data=await api<{events:EventItem[]}>(`/api/events?${params}`);state.events=state.status==='active'?data.events.filter((e)=>e.status!=='archived'):data.events;state.selected=new Set([...state.selected].filter((id)=>state.events.some((e)=>e.id===id)));}catch(error){state.error=state.online?messageFor(error):'You are offline. Reconnect to refresh the ledger.';}state.loading=false;render();
 }
 
 async function setStatus(ids:string[],status:string):Promise<void>{
-  try{if(ids.length===1)await api(`/api/events/${ids[0]}`,{method:'PATCH',body:JSON.stringify({status})});else await api('/api/events',{method:'PATCH',body:JSON.stringify({ids,status})});state.events=state.events.map((e)=>ids.includes(e.id)?{...e,status:status as EventItem['status']}:e);if(state.status==='active'&&status==='archived')state.events=state.events.filter((e)=>!ids.includes(e.id));state.selected.clear();toast(status==='acknowledged'?'Marked as acknowledged.':'Ledger state updated.');render();void loadSources(false);}catch(error){state.error=(error as Error).message;render();}
+  try{if(ids.length===1)await api(`/api/events/${ids[0]}`,{method:'PATCH',body:JSON.stringify({status})});else await api('/api/events',{method:'PATCH',body:JSON.stringify({ids,status})});state.events=state.events.map((e)=>ids.includes(e.id)?{...e,status:status as EventItem['status']}:e);if(state.status==='active'&&status==='archived')state.events=state.events.filter((e)=>!ids.includes(e.id));state.selected.clear();toast(status==='acknowledged'?'Marked as acknowledged.':'Ledger state updated.');render();void loadSources(false);}catch(error){state.error=messageFor(error);render();}
 }
 
 async function createSource(form:HTMLFormElement):Promise<void>{
   const submit=form.querySelector<HTMLButtonElement>('button[type=submit]')!;submit.disabled=true;submit.textContent='Creating…';const fd=new FormData(form);
   const payload={name:fd.get('name'),alias:fd.get('alias'),signing_secret:fd.get('signing_secret')||null,redact_headers:String(fd.get('redact_headers')||'').split(',').map((v)=>v.trim()).filter(Boolean),redact_paths:String(fd.get('redact_paths')||'').split(',').map((v)=>v.trim()).filter(Boolean),retention_days:Number(fd.get('retention_days'))};
-  try{const data=await api<{alias:string;token:string;ingest_path:string}>('/api/sources',{method:'POST',body:JSON.stringify(payload)});state.credential={alias:data.alias,token:data.token,path:data.ingest_path};await loadSources(false);render();toast('Endpoint created. Copy its token now.');}catch(error){state.error=(error as Error).message;render();}
+  try{const data=await api<{alias:string;token:string;ingest_path:string}>('/api/sources',{method:'POST',body:JSON.stringify(payload)});state.credential={alias:data.alias,token:data.token,path:data.ingest_path};await loadSources(false);render();toast('Endpoint created. Copy its token now.');}catch(error){state.error=messageFor(error);render();}
 }
 
-async function deleteSource(id:string):Promise<void>{try{await api(`/api/sources/${id}`,{method:'DELETE'});state.credential=null;await Promise.all([loadSources(false),loadEvents(false)]);toast('Source and its events were removed.');}catch(error){state.error=(error as Error).message;render();}}
+async function deleteSource(id:string):Promise<void>{try{await api(`/api/sources/${id}`,{method:'DELETE'});state.credential=null;await Promise.all([loadSources(false),loadEvents(false)]);toast('Source and its events were removed.');}catch(error){state.error=messageFor(error);render();}}
 
 async function copyCurl():Promise<void>{if(!state.credential)return;const command=`curl -X POST '${location.origin}${state.credential.path}' -H 'Content-Type: application/json' -H 'X-Ledger-Token: ${state.credential.token}' -d '{"type":"deploy.completed","summary":"Production deploy completed","version":"1.0.0"}'`;try{await navigator.clipboard.writeText(command);toast('cURL example copied.');}catch{state.error='Clipboard access was blocked. Select and copy the receiver URL and token above.';render();}}
 
-async function loadDigest(show=false):Promise<void>{if(show){state.digest=null;render();}try{state.digest=await api<Digest>(`/api/digest?hours=${state.pro?state.digestHours:24}`);}catch(error){state.error=(error as Error).message;}render();}
+async function loadDigest(show=false):Promise<void>{if(show){state.digest=null;render();}try{state.digest=await api<Digest>(`/api/digest?hours=${state.pro?state.digestHours:24}`);}catch(error){state.error=messageFor(error);}render();}
 
 async function copyDigest():Promise<void>{if(!state.digest)return;const lines=[`Internal Event Ledger — ${state.digest.total_occurrences} arrivals / ${state.digest.hours}h`,`${state.digest.unread_groups} unread groups`,...state.digest.events.map((e)=>`• ${e.summary} — ${e.source_name} ×${e.occurrence_count} [${e.status}]`)];try{await navigator.clipboard.writeText(lines.join('\n'));toast('Digest copied.');}catch{state.error='Clipboard access was blocked by the browser.';render();}}
 
-async function loadSettings(show=true):Promise<void>{try{const data=await api<{digest_hour:string}>('/api/settings');state.digestHour=data.digest_hour;}catch(error){state.error=(error as Error).message;}if(show)render();}
-async function saveSettings(value:string):Promise<void>{try{const data=await api<{digest_hour:string}>('/api/settings',{method:'PUT',body:JSON.stringify({digest_hour:value})});state.digestHour=data.digest_hour;toast('Daily review time saved.');}catch(error){state.error=(error as Error).message;}render();}
-async function runRetention():Promise<void>{if(!confirm('Delete events older than each source retention policy? This cannot be undone.'))return;try{const data=await api<{deleted:number}>('/api/maintenance/retention',{method:'POST',body:'{}'});toast(`${data.deleted} expired event${data.deleted===1?'':'s'} deleted.`);await loadEvents(false);}catch(error){state.error=(error as Error).message;render();}}
+async function loadSettings(show=true):Promise<void>{try{const data=await api<{digest_hour:string}>('/api/settings');state.digestHour=data.digest_hour;}catch(error){state.error=messageFor(error);}if(show)render();}
+async function saveSettings(value:string):Promise<void>{try{const data=await api<{digest_hour:string}>('/api/settings',{method:'PUT',body:JSON.stringify({digest_hour:value})});state.digestHour=data.digest_hour;toast('Daily review time saved.');}catch(error){state.error=messageFor(error);}render();}
+async function runRetention():Promise<void>{if(!confirm('Delete events older than each source retention policy? This cannot be undone.'))return;try{const data=await api<{deleted:number}>('/api/maintenance/retention',{method:'POST',body:'{}'});toast(`${data.deleted} expired event${data.deleted===1?'':'s'} deleted.`);await loadEvents(false);}catch(error){state.error=messageFor(error);render();}}
+
+async function exportEvents(format:'csv'|'json'):Promise<void>{try{const response=await fetch(`/api/export?format=${format}`,{headers:{authorization:`Bearer ${state.adminToken}`}});if(!response.ok)throw new ApiRequestError(response.status,'Could not export the ledger.');const blob=await response.blob();const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`event-ledger.${format}`;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),0);toast(`Exported ${format.toUpperCase()}.`);}catch(error){state.error=messageFor(error);render();}}
 
 function toast(message:string):void{const region=document.querySelector('.toast-region');if(!region)return;const node=document.createElement('div');node.className='toast';node.textContent=message;region.append(node);setTimeout(()=>node.remove(),3600);}
 
@@ -237,19 +259,11 @@ function save(key:string,value:string):void{try{localStorage.setItem(key,value);
 async function initLicense():Promise<void>{
   const params=new URLSearchParams(location.search);const returned=params.get('license');
   if(returned){save(LICENSE_KEY,returned);params.delete('license');history.replaceState({},'',`${location.pathname}${params.size?`?${params}`:''}${location.hash}`);}
-  const token=returned||stored(LICENSE_KEY);if(!token)return;
-  const cached=parseJson<{valid:boolean;checked_at:number}>(stored(VERDICT_KEY)||'',{valid:false,checked_at:0});
-  if(cached.valid)state.pro=true;
-  if(Date.now()-cached.checked_at<86_400_000&&!returned)return;
-  await verifyLicense(token,false);
 }
 
-async function verifyLicense(token:string,announce=true):Promise<void>{
-  try{const response=await fetch(`${BILLING}/verify?license=${encodeURIComponent(token)}`);if(!response.ok)throw new Error('Verification service unavailable');const result=await response.json() as {valid:boolean;reason:string};save(VERDICT_KEY,JSON.stringify({valid:result.valid,checked_at:Date.now()}));state.pro=result.valid;if(result.valid){save(LICENSE_KEY,token);state.licenseNotice='License verified. Pro capacity is ready.';}else{state.licenseNotice='License no longer active. Free features and exports remain available.';}if(announce)render();}
-  catch{if(announce){state.licenseNotice='Could not verify while offline. Your free ledger remains available.';render();}}
-}
-async function restoreLicense(token:string):Promise<void>{if(!token.trim()){state.licenseNotice='Paste a license token to restore your purchase.';render();return;}await verifyLicense(token.trim());}
-function removeLicense():void{localStorage.removeItem(LICENSE_KEY);localStorage.removeItem(VERDICT_KEY);state.pro=false;state.licenseNotice='License removed from this browser.';render();}
+async function loadLicense(show=true):Promise<void>{try{const data=await api<{pro:boolean}>('/api/license');state.pro=data.pro;}catch(error){state.error=messageFor(error);}if(show)render();}
+async function restoreLicense(token:string):Promise<void>{if(!token.trim()){state.licenseNotice='Paste a license token to restore your purchase.';render();return;}try{const result=await api<{pro:boolean;notice:string}>('/api/license',{method:'PUT',body:JSON.stringify({license:token.trim()})});save(LICENSE_KEY,token.trim());state.pro=result.pro;state.licenseNotice=result.notice;render();}catch(error){state.licenseNotice=messageFor(error);render();}}
+async function removeLicense():Promise<void>{try{await api('/api/license',{method:'DELETE'});localStorage.removeItem(LICENSE_KEY);state.pro=false;state.licenseNotice='License removed from this server and this browser.';}catch(error){state.licenseNotice=messageFor(error);}render();}
 
 window.addEventListener('popstate',()=>{state.view=routeView();render();});
 window.addEventListener('online',()=>{state.online=true;void refreshAll();});
@@ -257,11 +271,15 @@ window.addEventListener('offline',()=>{state.online=false;render();});
 
 async function start():Promise<void>{
   await initLicense();
-  if(state.pro)state.digestHours=Math.min(168,Math.max(1,Number(stored('ledger:digest-window'))||24));
   render();
-  await Promise.all([loadSources(false),loadEvents(false),loadSettings(false)]);
+  if('serviceWorker' in navigator)registerServiceWorker();
+  if(state.accessRequired)return;
+  if(!state.online){state.loading=false;state.error='You are offline. Reconnect to refresh the ledger.';render();return;}
+  await refreshAll();
+  if(state.pro)state.digestHours=Math.min(168,Math.max(1,Number(stored('ledger:digest-window'))||24));
   if(state.view==='digest')await loadDigest();else render();
-  if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
 }
+
+function registerServiceWorker():void{let reloading=false;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!reloading){reloading=true;location.reload();}});navigator.serviceWorker.register(`/sw.js?build=${encodeURIComponent(BUILD_SHA)}`).catch(()=>{});}
 
 void start();

@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 
 const base = process.argv[2] || 'http://127.0.0.1:8080';
+const adminToken = process.env.ADMIN_TOKEN || 'ledger-test-admin';
 const executablePath = process.env.CHROMIUM_PATH;
 const browser = await chromium.launch(executablePath ? { executablePath } : {});
 const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -12,6 +13,9 @@ page.on('console', (message) => { if (message.type() === 'error') errors.push(me
 page.on('response', (response) => { if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`); });
 
 await page.goto(base, { waitUntil: 'networkidle' });
+await page.getByLabel('Administrator token').fill(adminToken);
+await page.getByRole('button', { name: 'Unlock ledger' }).click();
+await page.getByRole('heading', { name: 'Event ledger' }).waitFor();
 await page.getByRole('button', { name: 'Sources' }).click();
 const suffix = Date.now().toString().slice(-7);
 await page.getByLabel('Source name').fill(`Smoke source ${suffix}`);
@@ -39,9 +43,9 @@ await page.goto(`${base}/privacy`, { waitUntil: 'networkidle' });
 await page.getByRole('heading', { name: 'Privacy' }).waitFor();
 
 const h1Count = await page.locator('h1').count();
-const sources = await (await context.request.get(`${base}/api/sources`)).json();
+const sources = await (await context.request.get(`${base}/api/sources`, { headers: { authorization: `Bearer ${adminToken}` } })).json();
 const created = sources.sources.find((source) => source.alias === `smoke-${suffix}`);
-if (created) await context.request.delete(`${base}/api/sources/${created.id}`);
+if (created) await context.request.delete(`${base}/api/sources/${created.id}`, { headers: { authorization: `Bearer ${adminToken}` } });
 await browser.close();
 if (h1Count !== 1 || errors.length) throw new Error(`Smoke failed: h1=${h1Count}, errors=${JSON.stringify(errors)}, responses=${JSON.stringify(badResponses)}`);
 console.log(JSON.stringify({ status: 'ok', source: `smoke-${suffix}`, ingest: 202, acknowledged: true, digest: true, privacy: true, consoleErrors: 0 }));

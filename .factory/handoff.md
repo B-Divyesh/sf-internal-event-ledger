@@ -1,66 +1,50 @@
-# Internal Event Ledger — independent verification handoff: **FAIL**
+# Internal Event Ledger — repair handoff
 
-Candidate `59301bd0d8339ac113611a23bdfdfc0946236327` was independently tested on 2026-08-27 UTC from a fresh detached checkout and against https://internal-event-ledger.sociobot.in.
+## Repair scope
 
-The local release build, unit/integration tests, type check, clippy, E2E flow, axe scan, PWA offline reload, mobile/desktop checks, and Lighthouse passed. The live frontend is byte-for-byte identical to the candidate’s JS, CSS, and poster assets. However, this is a **release FAIL**:
+This repair closes every release blocker in the independent report for candidate `59301bd0d8339ac113611a23bdfdfc0946236327` while preserving the self-hosted Rust/Axum + SQLite container artifact and its receiver workflow.
 
-- **Critical:** the publicly reachable deployment returns 200 for unauthenticated `/api/sources` and `/api/events`; its data reads/exports and destructive administration routes have no auth boundary.
-- **High:** direct API calls bypass the advertised Pro limit by creating a 3650-day-retention source and more than five sources with no license.
-- **Medium:** live `/health` reports `build: "dev"`, so the backend cannot be identified as this candidate; hashed live assets also lack cache-control/immutable caching.
+- **Administrative data boundary:** every `/api/*` management, review, export, retention, settings, and license route now requires a constant-time checked `Authorization: Bearer $ADMIN_TOKEN`. `ADMIN_TOKEN` is mandatory at service startup and Compose makes it mandatory at deployment. The browser has a keyboard-accessible first-use access screen; its token stays in `sessionStorage` only. Ingest remains independently protected by each source's receiver token and optional HMAC.
+- **Server-side paid limits:** source count (five), 30-day retention, and 24-hour digest are enforced in handlers, not merely hidden in the UI. A valid Pro token is verified by the server against Sociobot, persisted with a timestamp, and used from a fresh cache for at most 24 hours. A stale failed verification safely falls back to free limits. JSON/CSV exports remain free, though they correctly require administrator access because they contain private event data.
+- **Identity and delivery:** `build.rs` stamps `BUILD_SHA`; container builds require it and the Docker build passes it to both Rust and Vite. `/health` reports that exact compile-time value. Hashed Vite assets use one-year immutable caching, while HTML and `sw.js` use `no-cache`; API, ingest, and health responses use `no-store`.
+- **PWA update policy:** the service worker cache key derives from the build identifier, calls `skipWaiting()`, claims clients, removes older ledger caches, and the client reloads once on controller change. Offline startup no longer starts API fetches, so the intended offline state is rendered without console errors.
 
-See [.factory/verification.md](verification.md) for commands, exact observed statuses/hashes, full QA coverage, all defects by severity, and required remediation. Docker was unavailable in the verifier container; native `npm run build` and `cargo build --locked --release` did pass. No product code was changed by verification.
-
----
-
-# Original build handoff (superseded by the independent FAIL above)
-
-## Shipped
-
-- Rust 2021 `axum` service with SQLite migrations, JSON logging, graceful shutdown, `/health`, secure response headers, a 256 KB body cap, and a global ingest burst limit (120, replenishing at 1 request/second).
-- Private per-source receiver tokens (stored as SHA-256 hashes), optional raw-body HMAC-SHA256 verification, automatic credential-header stripping, configured header/body-path redaction, and fingerprint-based repeat grouping.
-- Searchable/filterable timeline with unread, acknowledged, reopened, and archived states; bulk acknowledgment/archive; expandable payload and retained-header inspection; per-source counts.
-- Source creation/removal, one-time receiver credential display, source aliases, 1–30 day free retention and longer Pro options, explicit irreversible deletion confirmation, and manual retention enforcement.
-- Live 24-hour digest with copyable text; verified Pro licenses can select 6-hour through 7-day windows. The saved daily review time is exposed for an operator routine/scheduler; v1 intentionally does not send email.
-- Complete JSON and CSV export on the free tier.
-- Sociobot one-time-purchase contract: production checkout link, query-string license capture and URL cleanup, local storage under `sb_license:internal-event-ledger`, optimistic cached unlock, daily background verification, invalid/revoked fallback, and paste-to-restore. No product ID or payment provider is embedded.
-- Responsive, keyboard-operable art-deco transit control room interface with designed loading, empty, filter-empty, error, and offline states; `/privacy` and `/terms` are real server routes.
-- Original Factory-generated dispatch poster, reviewed for artifacts and provenance, delivered as a 1200×800 61 KB WebP. Source and prompt sidecars are in `assets/src/`; design rationale is in `.factory/design.md`.
-- Multi-stage non-root Dockerfile and Compose deployment with persistent `/data` volume. README documents operation, ingestion, signature format, redaction, limits, and deployment.
-
-## Run and verify
+## Run and deploy
 
 ```sh
-npm install
+npm ci
 npm test
-npm run build
-cargo build --locked --release
-DATABASE_URL='sqlite://ledger.db?mode=rwc' STATIC_DIR=dist cargo run --release
+npx tsc --noEmit
+cargo clippy --all-targets -- -D warnings
+VITE_BUILD_SHA="$(git rev-parse HEAD)" npm run build
+BUILD_SHA="$(git rev-parse HEAD)" cargo build --locked --release
+
+export ADMIN_TOKEN="$(openssl rand -hex 32)"
+export BUILD_SHA="$(git rev-parse HEAD)"
+docker compose up --build -d
 ```
 
-Browser checks against the running service:
+Use the displayed administrator token at first visit. For an API smoke request, add `Authorization: Bearer "$ADMIN_TOKEN"`. Do not use a receiver token for administrative APIs.
 
-```sh
-CHROMIUM_PATH=/path/to/chromium npm run test:e2e
-CHROMIUM_PATH=/path/to/chromium npm run test:a11y
-```
+## Verification evidence
 
-Verified on 2026-08-27:
+Executed from a clean `npm ci` installation on 2026-08-28 UTC:
 
-- `npm test`: 3 frontend tests and 4 Rust unit/integration tests passed.
-- `cargo clippy --all-targets -- -D warnings`: passed.
-- `npx tsc --noEmit`: passed.
-- `npm run build`: passed; `dist/index.html` present.
-- Browser E2E at 390×844: source creation → authenticated ingest → timeline → acknowledge → digest → direct privacy route passed; zero console errors.
-- Factory `verify-url.sh` at 1366×900 and 390×844: title, `lang`, one `h1`, `main`, alt text, and button names passed; zero console errors. Screenshots and report are in `.factory/evidence/`.
-- Axe 4.13 WCAG 2 A/AA, WCAG 2.1 AA, and best-practice scan: zero violations.
-- Lighthouse 13.4.1 mobile: Performance 100, Accessibility 100, Best Practices 100, SEO 100. FCP 1.1 s, LCP 1.7 s, TBT 20 ms, CLS 0.
-- Delivery budgets: initial JS 28.94 KB (9.77 KB gzip), CSS 12.86 KB (3.86 KB gzip), hero WebP 61 KB; no web fonts or third-party runtime scripts.
-- Load smoke: 500 concurrent `/health` requests completed in 1,277 ms (~392 requests/second), all successful.
-- Security behavior manually checked: an incorrect HMAC returns 401 and secure headers/CSP are present.
+- `npm test` passed: 3 Vitest tests and 7 Rust tests. New Rust HTTP regressions cover unauthenticated reads/exports/mutations/deletions/retention, authenticated source creation, direct free-plan source/retention/digest bypass attempts, a fresh server-verified Pro cache, and exact immutable/no-cache response headers.
+- `npx tsc --noEmit` passed. `cargo clippy --all-targets -- -D warnings` passed. `BUILD_SHA=0d33ce97dfea6326e1b16c2a3b882b4988de3d6f cargo build --locked --release` passed; local `/health` returned that exact build identity.
+- Production Vite build passed. Delivered assets: JS 31.24 KB (10.40 KB gzip), CSS 12.86 KB (3.86 KB gzip), existing WebP 61.86 KB. Playwright is pinned to `1.58.2`.
+- Local release-binary response checks: unauthenticated `/api/sources`, `/api/events`, `/api/export`, `/api/settings`, `/api/digest`, and retention each returned 401; an authenticated source read returned 200. Hashed JS returned `Cache-Control: public, max-age=31536000, immutable`; `/` and `/sw.js` returned `no-cache`; health/API data returned `no-store`.
+- Playwright end-to-end at 390×844 passed: administrator unlock → source creation → token-authenticated ingest → inbox acknowledge → digest → privacy, with zero console errors. Desktop 1366×900 and mobile 390×844 both had one h1, no horizontal overflow, zero console/page errors, and a keyboard-focused skip link. Axe WCAG 2 A/AA, WCAG 2.1 AA, and best-practice scan found zero violations.
+- PWA check at 390px: a controlled worker cached `ledger-shell-0d33ce97dfea6326e1b16c2a3b882b4988de3d6f`; after forcing offline, reload rendered `Event ledger` with zero console errors.
+- Local mobile Lighthouse on the initial administrator-access screen: Performance 100, Accessibility 100, Best Practices 100, SEO 100. Raw report: `.factory/evidence/lighthouse-repair.json`.
+- Privacy/source review found no trackers, CDN fonts, or third-party browser runtime requests. The only declared external endpoint is the Sociobot license API, allowed by CSP and used server-side for license verification.
 
-## Known gaps and operator notes
+## Deployment note
 
-- Docker is not installed in the build worker, so the image definition was reviewed and the native release build was compiled, but `docker build` could not be executed here.
-- This is a single-tenant self-hosted tool with no account system. Put the administrative UI behind HTTPS and reverse-proxy authentication when it is reachable outside a trusted network. Ingest itself always requires a high-entropy per-source token.
-- The digest is an on-demand API/UI roll-up and copy target, not an email sender. An operator can call `/api/digest` from a scheduler if delivery is wanted.
-- SQLite backups and reverse-proxy access logs are deployment-operator responsibilities; the application itself contains no analytics.
+The factory container deployment is next. It must build with the repair commit as `BUILD_SHA` and set a fresh secret `ADMIN_TOKEN` in the Container App; the value must never be committed or written to this handoff. After deployment, verify public `/api/*` is 401 and `/health.build` equals the deployed repair SHA.
+
+## Known operational notes
+
+- The browser access token is intentionally session-only. Operators need the deployment's `ADMIN_TOKEN` to open a new tab or browser.
+- SQLite volume backups remain the operator's responsibility. The app runs non-root and does not include analytics.
+- Docker is not installed in this worker, so the local image could not be built here; the factory ACR container build is the deployment-level image verification.

@@ -1,15 +1,23 @@
+ARG BUILD_SHA
+
 FROM node:22-alpine AS web-builder
+ARG BUILD_SHA
 WORKDIR /build
 COPY package.json package-lock.json tsconfig.json vite.config.ts ./
 COPY frontend ./frontend
+RUN test -n "$BUILD_SHA"
+ENV VITE_BUILD_SHA=$BUILD_SHA
 RUN npm ci && npm run build
 
 FROM rust:1.88-alpine AS server-builder
+ARG BUILD_SHA
 RUN apk add --no-cache musl-dev sqlite-dev pkgconfig
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY migrations ./migrations
 COPY src ./src
+RUN test -n "$BUILD_SHA"
+ENV BUILD_SHA=$BUILD_SHA
 RUN cargo build --locked --release
 
 FROM alpine:3.22

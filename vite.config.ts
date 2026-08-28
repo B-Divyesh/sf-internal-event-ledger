@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  define: {
+    __BUILD_SHA__: JSON.stringify(process.env.VITE_BUILD_SHA || 'dev'),
+  },
   root: 'frontend',
   publicDir: 'public',
   build: {
