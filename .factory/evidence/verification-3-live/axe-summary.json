@@ -1,0 +1,25 @@
+{
+  "candidate": "37e1e5192412cf820a54e8e6ed9eb4ad6672fd2c",
+  "verified_at": "2026-08-28T06:30:00Z",
+  "viewports": ["1366x900", "390x844"],
+  "screens_with_zero_violations": [
+    "authenticated Inbox",
+    "authenticated Sources",
+    "authenticated Digest",
+    "Privacy",
+    "Terms",
+    "live administrator access"
+  ],
+  "settings": {
+    "rule": "color-contrast",
+    "impact": "serious",
+    "affected_nodes": 4,
+    "reproduced_at_both_viewports": true,
+    "nodes": [
+      {"target": "label[for=license-token]", "ratio": "1.09:1", "required": "4.5:1"},
+      {"target": ".wide.actions > .button[type=submit]", "ratio": "1.09:1", "required": "4.5:1"},
+      {"target": ".form-help > a[data-legal=privacy]", "ratio": "1.89:1", "required": "4.5:1"},
+      {"target": ".form-help > a[data-legal=terms]", "ratio": "1.89:1", "required": "4.5:1"}
+    ]
+  }
+}
