@@ -39,9 +39,12 @@ Executed from a clean `npm ci` installation on 2026-08-28 UTC:
 - Local mobile Lighthouse on the initial administrator-access screen: Performance 100, Accessibility 100, Best Practices 100, SEO 100. Raw report: `.factory/evidence/lighthouse-repair.json`.
 - Privacy/source review found no trackers, CDN fonts, or third-party browser runtime requests. The only declared external endpoint is the Sociobot license API, allowed by CSP and used server-side for license verification.
 
-## Deployment note
+## Deployment evidence
 
-The factory container deployment is next. It must build with the repair commit as `BUILD_SHA` and set a fresh secret `ADMIN_TOKEN` in the Container App; the value must never be committed or written to this handoff. After deployment, verify public `/api/*` is 401 and `/health.build` equals the deployed repair SHA.
+- ACR build `ch89` succeeded for immutable image `sociobotregistry.azurecr.io/sf-internal-event-ledger:6527359b84212aab696f35d3274872326462782d`, with that SHA supplied as Docker `BUILD_SHA`.
+- The existing factory Container App was updated to that image with a newly generated `admin-token` secret referenced only at runtime as `ADMIN_TOKEN`; the secret value was not written to source control or this handoff.
+- Live URL `https://internal-event-ledger.sociobot.in` returned `{"build":"6527359b84212aab696f35d3274872326462782d","status":"ok"}` from `/health`. Public `/api/sources` returned 401. The live hashed Vite JS returned `Cache-Control: public, max-age=31536000, immutable`; live `/sw.js` returned `no-cache`.
+- A fresh live Playwright 390px check on the access boundary found one h1, no horizontal overflow, zero console/page errors, and zero Axe WCAG 2 A/AA, WCAG 2.1 AA, and best-practice violations.
 
 ## Known operational notes
 
