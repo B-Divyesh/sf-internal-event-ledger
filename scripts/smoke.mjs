@@ -46,6 +46,28 @@ const h1Count = await page.locator('h1').count();
 const sources = await (await context.request.get(`${base}/api/sources`, { headers: { authorization: `Bearer ${adminToken}` } })).json();
 const created = sources.sources.find((source) => source.alias === `smoke-${suffix}`);
 if (created) await context.request.delete(`${base}/api/sources/${created.id}`, { headers: { authorization: `Bearer ${adminToken}` } });
+
+const checkoutContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+const checkoutPage = await checkoutContext.newPage();
+await checkoutPage.route(`${base}/api/license`, async (route) => {
+  if (route.request().method() === 'PUT') {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ pro: true, notice: 'License verified by this server.' }) });
+    return;
+  }
+  await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ pro: false }) });
+});
+await checkoutPage.goto(`${base}/?license=returned-license-token`, { waitUntil: 'networkidle' });
+if (new URL(checkoutPage.url()).searchParams.has('license')) throw new Error('Checkout license was not removed from the return URL');
+if (await checkoutPage.evaluate(() => localStorage.getItem('sb_license:internal-event-ledger')) !== 'returned-license-token') throw new Error('Checkout license was not retained for authenticated application');
+await checkoutPage.getByText('A checkout license is ready to apply after administrator access.').waitFor();
+const applyRequest = checkoutPage.waitForRequest((request) => request.url() === `${base}/api/license` && request.method() === 'PUT');
+await checkoutPage.getByLabel('Administrator token').fill(adminToken);
+await checkoutPage.getByRole('button', { name: 'Unlock ledger' }).click();
+const applied = await applyRequest;
+if (JSON.parse(applied.postData() || '{}').license !== 'returned-license-token') throw new Error('Returned checkout license was not applied to the server');
+await checkoutPage.getByRole('button', { name: 'Settings' }).click();
+await checkoutPage.getByText('License verified by this server.').waitFor();
+await checkoutContext.close();
 await browser.close();
 if (h1Count !== 1 || errors.length) throw new Error(`Smoke failed: h1=${h1Count}, errors=${JSON.stringify(errors)}, responses=${JSON.stringify(badResponses)}`);
 console.log(JSON.stringify({ status: 'ok', source: `smoke-${suffix}`, ingest: 202, acknowledged: true, digest: true, privacy: true, consoleErrors: 0 }));

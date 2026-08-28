@@ -1,6 +1,6 @@
 use axum::{
     body::{Body, Bytes},
-    extract::{DefaultBodyLimit, Path, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -15,16 +15,15 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, FromRow, SqlitePool};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     io::{ErrorKind, Write},
+    net::IpAddr,
     path::{Path as FilePath, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
+    time::Instant,
 };
 use subtle::ConstantTimeEq;
-use tower_governor::{
-    governor::GovernorConfigBuilder, key_extractor::GlobalKeyExtractor, GovernorLayer,
-};
 use tower_http::{
     catch_panic::CatchPanicLayer,
     limit::RequestBodyLimitLayer,
@@ -114,6 +113,13 @@ pub struct AppState {
     admin_token: Arc<str>,
     billing_api_base: Arc<str>,
     http: reqwest::Client,
+    ingest_limits: Arc<Mutex<HashMap<String, IngestBucket>>>,
+    trusted_proxy_ips: Arc<HashSet<IpAddr>>,
+}
+
+struct IngestBucket {
+    tokens: f64,
+    updated_at: Instant,
 }
 
 impl AppState {
@@ -123,7 +129,14 @@ impl AppState {
             admin_token: Arc::from(admin_token),
             billing_api_base: Arc::from(billing_api_base.trim_end_matches('/').to_owned()),
             http: reqwest::Client::new(),
+            ingest_limits: Arc::new(Mutex::new(HashMap::new())),
+            trusted_proxy_ips: Arc::new(HashSet::new()),
         }
+    }
+
+    pub fn with_trusted_proxy_ips(mut self, trusted_proxy_ips: HashSet<IpAddr>) -> Self {
+        self.trusted_proxy_ips = Arc::new(trusted_proxy_ips);
+        self
     }
 }
 
@@ -138,15 +151,7 @@ pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
 
 pub fn app(state: AppState, static_dir: PathBuf) -> Router {
     let index = static_dir.join("index.html");
-    let ingest_limit = GovernorConfigBuilder::default()
-        .per_second(1)
-        .burst_size(120)
-        .key_extractor(GlobalKeyExtractor)
-        .finish()
-        .expect("valid ingest rate limit");
-    let ingest_routes = Router::new()
-        .route("/ingest/{alias}", post(ingest))
-        .layer(GovernorLayer::new(ingest_limit));
+    let ingest_routes = Router::new().route("/ingest/{alias}", post(ingest));
     let api = Router::new()
         .route("/sources", get(list_sources).post(create_source))
         .route("/sources/{id}", delete(delete_source))
@@ -191,6 +196,12 @@ async fn security_headers(req: Request<Body>, next: Next) -> Response {
     );
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    // This host is HTTPS-only. Do not include subdomains: deployments can use
+    // independent hostnames that are outside this product's security policy.
+    h.insert(
+        "strict-transport-security",
+        HeaderValue::from_static("max-age=31536000"),
+    );
     h.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
@@ -350,35 +361,46 @@ async fn create_source(
             "The free plan supports retention from 1 to 30 days. Add a valid Pro license to use longer retention.".into(),
         ));
     }
-    if !pro {
-        let source_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sources")
-            .fetch_one(&s.pool)
-            .await?;
-        if source_count >= 5 {
-            return Err(ApiError(
-                StatusCode::FORBIDDEN,
-                "The free plan supports up to five sources. Add a valid Pro license to create another source.".into(),
-            ));
-        }
-    }
     let mut raw = [0u8; 24];
     rand::rng().fill_bytes(&mut raw);
     let token = hex::encode(raw);
     let token_hash = sha256_hex(token.as_bytes());
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
-    let result = sqlx::query("INSERT INTO sources(id,name,alias,token_hash,signing_secret,redact_headers,redact_paths,retention_days,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
-        .bind(&id).bind(input.name.trim()).bind(&alias).bind(token_hash).bind(input.signing_secret.filter(|v| !v.is_empty()))
-        .bind(serde_json::to_string(&input.redact_headers).unwrap()).bind(serde_json::to_string(&input.redact_paths).unwrap())
-        .bind(retention).bind(now).execute(&s.pool).await;
-    if let Err(e) = result {
-        if e.to_string().contains("UNIQUE") {
+    // The free-tier predicate lives in the INSERT, rather than a preceding
+    // COUNT, so concurrent requests cannot observe the same remaining slot.
+    let query = if pro {
+        "INSERT INTO sources(id,name,alias,token_hash,signing_secret,redact_headers,redact_paths,retention_days,created_at) VALUES(?,?,?,?,?,?,?,?,?)"
+    } else {
+        "INSERT INTO sources(id,name,alias,token_hash,signing_secret,redact_headers,redact_paths,retention_days,created_at) SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM sources) < 5"
+    };
+    let result = match sqlx::query(query)
+        .bind(&id)
+        .bind(input.name.trim())
+        .bind(&alias)
+        .bind(token_hash)
+        .bind(input.signing_secret.filter(|v| !v.is_empty()))
+        .bind(serde_json::to_string(&input.redact_headers).unwrap())
+        .bind(serde_json::to_string(&input.redact_paths).unwrap())
+        .bind(retention)
+        .bind(now)
+        .execute(&s.pool)
+        .await
+    {
+        Ok(result) => result,
+        Err(error) if error.to_string().contains("UNIQUE") => {
             return Err(ApiError(
                 StatusCode::CONFLICT,
                 "That endpoint alias is already in use.".into(),
-            ));
+            ))
         }
-        return Err(e.into());
+        Err(error) => return Err(error.into()),
+    };
+    if !pro && result.rows_affected() == 0 {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "The free plan supports up to five sources. Add a valid Pro license to create another source.".into(),
+        ));
     }
     Ok((
         StatusCode::CREATED,
@@ -420,6 +442,7 @@ async fn ingest(
     State(s): State<AppState>,
     Path(alias): Path<String>,
     Query(q): Query<IngestQuery>,
+    peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
@@ -461,6 +484,16 @@ async fn ingest(
                 "The event signature did not match.".into(),
             ));
         }
+    }
+    if !take_ingest_token(
+        &s,
+        &source.id,
+        client_ip(&s, peer.as_ref().map(|Extension(peer)| peer), &headers),
+    ) {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "This receiver is accepting events too quickly. Try again shortly.".into(),
+        ));
     }
     let mut payload: Value = serde_json::from_slice(&body)
         .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "Body must be valid JSON.".into()))?;
@@ -519,6 +552,52 @@ async fn ingest(
         StatusCode::ACCEPTED,
         Json(json!({"accepted":true,"fingerprint":fingerprint})),
     ))
+}
+
+/// Limit only successfully authenticated deliveries. A sender without a valid
+/// receiver secret cannot spend another source's capacity, and each source/IP
+/// pair has its own 120-event burst with a one-event-per-second refill.
+fn take_ingest_token(state: &AppState, source_id: &str, peer_ip: Option<std::net::IpAddr>) -> bool {
+    let key = format!(
+        "{source_id}:{}",
+        peer_ip
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "direct".into())
+    );
+    let now = Instant::now();
+    let mut limits = state.ingest_limits.lock().expect("ingest rate-limit lock");
+    let bucket = limits.entry(key).or_insert(IngestBucket {
+        tokens: 120.0,
+        updated_at: now,
+    });
+    let elapsed = now.duration_since(bucket.updated_at).as_secs_f64();
+    bucket.tokens = (bucket.tokens + elapsed).min(120.0);
+    bucket.updated_at = now;
+    if bucket.tokens < 1.0 {
+        return false;
+    }
+    bucket.tokens -= 1.0;
+    true
+}
+
+/// `X-Forwarded-For` is trusted only when the TCP peer is explicitly listed
+/// by the operator. Otherwise the direct peer address is used, so callers
+/// cannot choose their own rate-limit key with a forged forwarding header.
+fn client_ip(
+    state: &AppState,
+    peer: Option<&ConnectInfo<std::net::SocketAddr>>,
+    headers: &HeaderMap,
+) -> Option<IpAddr> {
+    let peer_ip = peer.map(|peer| peer.0.ip());
+    if peer_ip.is_some_and(|ip| state.trusted_proxy_ips.contains(&ip)) {
+        return headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(',').next())
+            .and_then(|value| value.trim().parse().ok())
+            .or(peer_ip);
+    }
+    peer_ip
 }
 
 #[derive(Deserialize, Default)]
@@ -1216,6 +1295,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn simultaneous_free_source_creation_never_exceeds_five_sources() {
+        let (router, path) = new_test_router().await;
+        let mut requests = tokio::task::JoinSet::new();
+        for index in 0..20 {
+            let router = router.clone();
+            requests.spawn(async move {
+                create_test_source(&router, &format!("concurrent-{index}"), 30)
+                    .await
+                    .status()
+            });
+        }
+        let mut created = 0;
+        let mut rejected = 0;
+        while let Some(result) = requests.join_next().await {
+            match result.unwrap() {
+                StatusCode::CREATED => created += 1,
+                StatusCode::FORBIDDEN => rejected += 1,
+                status => panic!("unexpected concurrent creation response: {status}"),
+            }
+        }
+        assert_eq!(created, 5);
+        assert_eq!(rejected, 15);
+        let response = router
+            .oneshot(
+                admin(Request::builder().uri("/api/sources"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let payload: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(payload["sources"].as_array().unwrap().len(), 5);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn anonymous_ingest_flood_cannot_spend_a_valid_receivers_quota() {
+        let (router, path) = new_test_router().await;
+        let created = create_test_source(&router, "isolated-receiver", 30).await;
+        let payload: Value =
+            serde_json::from_slice(&created.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let token = payload["token"].as_str().unwrap().to_owned();
+        for _ in 0..160 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/ingest/nonexistent")
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"summary":"noise"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/ingest/isolated-receiver")
+                    .header("content-type", "application/json")
+                    .header("x-ledger-token", token)
+                    .body(Body::from(r#"{"summary":"accepted after flood"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn forwarded_addresses_are_used_only_for_a_trusted_proxy() {
+        let pool = SqlitePoolOptions::new()
+            .connect_lazy("sqlite::memory:")
+            .unwrap();
+        let trusted = "127.0.0.1".parse().unwrap();
+        let state = test_state(pool).with_trusted_proxy_ips(HashSet::from([trusted]));
+        let peer = ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 8080)));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.10".parse().unwrap());
+        assert_eq!(
+            client_ip(&state, Some(&peer), &headers),
+            Some("203.0.113.10".parse().unwrap())
+        );
+        let untrusted = test_state(
+            SqlitePoolOptions::new()
+                .connect_lazy("sqlite::memory:")
+                .unwrap(),
+        );
+        assert_eq!(
+            client_ip(&untrusted, Some(&peer), &headers),
+            Some("127.0.0.1".parse().unwrap())
+        );
+    }
+
+    #[tokio::test]
     async fn cache_policy_marks_hashed_assets_immutable_and_shell_revalidates() {
         assert!(is_hashed_asset("/assets/index-Abc12345.js"));
         assert!(!is_hashed_asset("/assets/dispatch-hall.webp"));
@@ -1244,6 +1425,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(shell.headers()[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(
+            shell.headers()["strict-transport-security"],
+            "max-age=31536000"
+        );
         let asset = static_router
             .clone()
             .oneshot(

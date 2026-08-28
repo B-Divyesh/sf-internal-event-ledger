@@ -58,6 +58,7 @@ Configuration is environment-only:
 | `ADMIN_TOKEN` | generated and persisted | Optional high-entropy override for administrative browser and API access |
 | `ADMIN_TOKEN_FILE` | `.internal-event-ledger-admin-token` natively; `/data/admin-token` in the image | Generated-token location |
 | `BILLING_API_BASE` | Sociobot production API | Server-side Pro license verification endpoint (override for staging) |
+| `TRUSTED_PROXY_IPS` | unset | Comma-separated reverse-proxy IPs whose `X-Forwarded-For` client address may be used for per-receiver ingest limiting |
 | `BUILD_SHA` | `dev` | Compile-time `/health` identity; release builds pass the full commit SHA as a build argument |
 
 ## Receive events
@@ -88,7 +89,7 @@ All management APIs, exports, event review, settings, retention, and licensing r
 
 There are no analytics, trackers, third-party fonts, or runtime CDN assets. Operational data stays in the deployment’s SQLite database. A restored license is retained in browser local storage and, when applied, in the server database so the server can perform its daily verification. Read the in-product `/privacy` and `/terms` pages for the full notices.
 
-Back up the `/data` volume and place the service behind HTTPS. The application itself enforces an administrator boundary; a reverse-proxy identity layer can be added as defense in depth. Ingest endpoints have individual high-entropy tokens; HMAC is recommended when the sender supports it. Hashed frontend assets are immutable-cached, HTML and `sw.js` revalidate, and a build-versioned worker immediately activates and reloads controlled clients after an update.
+Back up the `/data` volume and place the service behind HTTPS. The application itself enforces an administrator boundary; a reverse-proxy identity layer can be added as defense in depth. Ingest endpoints have individual high-entropy tokens; HMAC is recommended when the sender supports it. Authenticated deliveries are rate-limited independently by receiver and client address, so unauthenticated traffic cannot spend a receiver's quota. Set `TRUSTED_PROXY_IPS` only for proxies you operate; forwarding headers from every other peer are ignored. Hashed frontend assets are immutable-cached, HTML and `sw.js` revalidate, and a build-versioned worker immediately activates and reloads controlled clients after an update.
 
 ## License
 

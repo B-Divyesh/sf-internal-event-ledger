@@ -14,7 +14,7 @@ const state = {
   view: routeView(), sources: [] as Source[], events: [] as EventItem[], digest: null as Digest|null,
   selectedSource: '', status: 'active', search: '', loading: true, error: '', online: navigator.onLine,
   openEvent: '', selected: new Set<string>(), credential: null as null|{alias:string;token:string;path:string},
-  pro: false, licenseNotice: '', digestHour: '09:00', digestHours: 24, accessRequired: !sessionStored(ADMIN_TOKEN_KEY),
+  pro: false, licenseNotice: '', pendingLicense: Boolean(stored(LICENSE_KEY)), digestHour: '09:00', digestHours: 24, accessRequired: !sessionStored(ADMIN_TOKEN_KEY),
   adminToken: sessionStored(ADMIN_TOKEN_KEY) || '',
 };
 
@@ -170,11 +170,11 @@ function render():void {
 }
 
 function accessView():string {
-  return `<div class="shell access-shell"><main id="main" tabindex="-1"><section class="panel access-panel"><p class="eyebrow">Private control board</p><h1>Administrator access</h1><p>Enter the administrator token configured for this self-hosted ledger to review events, manage sources, and export records. It is kept only for this browser tab.</p>${state.error?`<div class="notice" role="alert">${escapeHtml(state.error)}</div>`:''}<form id="admin-access-form" class="form-grid"><div class="field wide"><label for="admin-token">Administrator token</label><input id="admin-token" name="token" type="password" required autocomplete="current-password"></div><div class="wide actions"><button class="button primary" type="submit">Unlock ledger</button></div></form><p class="form-help">Receiver endpoints continue to use their own private tokens. <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p></section></main></div>`;
+  return `<div class="shell access-shell"><main id="main" tabindex="-1"><section class="panel access-panel"><p class="eyebrow">Private control board</p><h1>Administrator access</h1><p>Enter the administrator token configured for this self-hosted ledger to review events, manage sources, and export records. It is kept only for this browser tab.</p>${state.pendingLicense?`<div class="notice" role="status">${escapeHtml(state.licenseNotice)}</div>`:''}${state.error?`<div class="notice" role="alert">${escapeHtml(state.error)}</div>`:''}<form id="admin-access-form" class="form-grid"><div class="field wide"><label for="admin-token">Administrator token</label><input id="admin-token" name="token" type="password" required autocomplete="current-password"></div><div class="wide actions"><button class="button primary" type="submit">Unlock ledger</button></div></form><p class="form-help">Receiver endpoints continue to use their own private tokens. <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p></section></main></div>`;
 }
 
 function bindAccess():void {
-  document.querySelector<HTMLFormElement>('#admin-access-form')?.addEventListener('submit',(event)=>{event.preventDefault();const token=String(new FormData(event.currentTarget as HTMLFormElement).get('token')||'').trim();if(!token){state.error='Enter the administrator token.';render();return;}state.adminToken=token;state.accessRequired=false;state.error='';try{sessionStorage.setItem(ADMIN_TOKEN_KEY,token);}catch{/* current-tab access still works */}void refreshAll();render();});
+  document.querySelector<HTMLFormElement>('#admin-access-form')?.addEventListener('submit',(event)=>{event.preventDefault();const token=String(new FormData(event.currentTarget as HTMLFormElement).get('token')||'').trim();if(!token){state.error='Enter the administrator token.';render();return;}state.adminToken=token;state.accessRequired=false;state.error='';try{sessionStorage.setItem(ADMIN_TOKEN_KEY,token);}catch{/* current-tab access still works */}void (async()=>{await refreshAll();void applyStoredLicense();})();render();});
 }
 
 function bind():void {
@@ -259,11 +259,14 @@ function save(key:string,value:string):void{try{localStorage.setItem(key,value);
 async function initLicense():Promise<void>{
   const params=new URLSearchParams(location.search);const returned=params.get('license');
   if(returned){save(LICENSE_KEY,returned);params.delete('license');history.replaceState({},'',`${location.pathname}${params.size?`?${params}`:''}${location.hash}`);}
+  state.pendingLicense=Boolean(returned||stored(LICENSE_KEY));
+  if(state.pendingLicense)state.licenseNotice='A checkout license is ready to apply after administrator access.';
 }
 
 async function loadLicense(show=true):Promise<void>{try{const data=await api<{pro:boolean}>('/api/license');state.pro=data.pro;}catch(error){state.error=messageFor(error);}if(show)render();}
 async function restoreLicense(token:string):Promise<void>{if(!token.trim()){state.licenseNotice='Paste a license token to restore your purchase.';render();return;}try{const result=await api<{pro:boolean;notice:string}>('/api/license',{method:'PUT',body:JSON.stringify({license:token.trim()})});save(LICENSE_KEY,token.trim());state.pro=result.pro;state.licenseNotice=result.notice;render();}catch(error){state.licenseNotice=messageFor(error);render();}}
 async function removeLicense():Promise<void>{try{await api('/api/license',{method:'DELETE'});localStorage.removeItem(LICENSE_KEY);state.pro=false;state.licenseNotice='License removed from this server and this browser.';}catch(error){state.licenseNotice=messageFor(error);}render();}
+async function applyStoredLicense():Promise<void>{const token=stored(LICENSE_KEY);if(!token||!state.adminToken)return;state.pendingLicense=false;try{const result=await api<{pro:boolean;notice:string}>('/api/license',{method:'PUT',body:JSON.stringify({license:token})});state.pro=result.pro;state.licenseNotice=result.notice;}catch(error){state.licenseNotice=`The saved checkout license could not be applied: ${messageFor(error)} You can retry from Settings.`;}render();}
 
 window.addEventListener('popstate',()=>{state.view=routeView();render();});
 window.addEventListener('online',()=>{state.online=true;void refreshAll();});
@@ -276,6 +279,7 @@ async function start():Promise<void>{
   if(state.accessRequired)return;
   if(!state.online){state.loading=false;state.error='You are offline. Reconnect to refresh the ledger.';render();return;}
   await refreshAll();
+  void applyStoredLicense();
   if(state.pro)state.digestHours=Math.min(168,Math.max(1,Number(stored('ledger:digest-window'))||24));
   if(state.view==='digest')await loadDigest();else render();
 }

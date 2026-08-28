@@ -31,7 +31,7 @@ a { color: var(--signal-dark); text-underline-offset: 3px; }
 .skip-link:focus { transform: translateY(0); }
 .shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0,1fr); }
 .sidebar { position: sticky; top: 0; height: 100vh; padding: 28px 20px; background: var(--night); color: var(--white); display: flex; flex-direction: column; overflow-y: auto; }
-.brand { display: flex; gap: 12px; align-items: center; color: var(--white); text-decoration: none; margin-bottom: 38px; }
+.brand { display: flex; min-height: 44px; gap: 12px; align-items: center; color: var(--white); text-decoration: none; margin-bottom: 38px; }
 .brand-mark { width: 42px; height: 42px; border: 2px solid #dba437; display: grid; place-items: center; position: relative; transform: rotate(45deg); }
 .brand-mark::before, .brand-mark::after { content: ""; position: absolute; background: var(--signal); }
 .brand-mark::before { width: 20px; height: 4px; }
@@ -55,6 +55,7 @@ a { color: var(--signal-dark); text-underline-offset: 3px; }
 .source-filter.selected .route-dot { background: var(--signal); }
 .source-count { margin-left: auto; color: #baa986; font-size: 12px; font-variant-numeric: tabular-nums; }
 .sidebar-foot { margin-top: auto; padding-top: 24px; font-size: 12px; color: #b9ad93; }
+.sidebar-foot a, .form-help a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }
 .sidebar-foot a { color: #e2d3b4; }
 .workspace { min-width: 0; }
 .topbar { min-height: 72px; padding: 12px clamp(16px,3vw,40px); border-bottom: 1px solid rgba(22,43,53,.25); background: rgba(243,233,210,.92); display: flex; align-items: center; justify-content: space-between; gap: 16px; }

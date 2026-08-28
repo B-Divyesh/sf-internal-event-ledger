@@ -1,5 +1,10 @@
 use internal_event_ledger::{app, create_pool, load_or_create_admin_token, AppState};
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{
+    collections::HashSet,
+    env,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -29,17 +34,35 @@ async fn main() -> anyhow::Result<()> {
     let billing_api_base = env::var("BILLING_API_BASE")
         .unwrap_or_else(|_| "https://api.sociobot.in/api/v1/products/internal-event-ledger".into());
     let pool = create_pool(&database_url).await?;
-    let state = AppState::new(pool, admin_token, billing_api_base);
+    let trusted_proxy_ips: HashSet<IpAddr> = env::var("TRUSTED_PROXY_IPS")
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|value| value.parse().ok())
+        .collect();
+    let trusted_proxy_count = trusted_proxy_ips.len();
+    let state = AppState::new(pool, admin_token, billing_api_base)
+        .with_trusted_proxy_ips(trusted_proxy_ips);
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
     info!(
         port,
         admin_token_source = %admin_token_source,
         admin_token_file = %admin_token_path.display(),
+        trusted_proxy_count,
         "ledger ready"
     );
-    axum::serve(listener, app(state, static_dir))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app(state, static_dir).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
