@@ -47,4 +47,4 @@ The factory container deployment is next. It must build with the repair commit a
 
 - The browser access token is intentionally session-only. Operators need the deployment's `ADMIN_TOKEN` to open a new tab or browser.
 - SQLite volume backups remain the operator's responsibility. The app runs non-root and does not include analytics.
-- Docker is not installed in this worker, so the local image could not be built here; the factory ACR container build is the deployment-level image verification.
+- Docker is not installed in this worker, so the local image could not be built here. The first ACR build caught and this repair corrects the missing `build.rs` Docker copy; the replacement ACR build is the deployment-level image verification.

@@ -13,7 +13,7 @@ FROM rust:1.88-alpine AS server-builder
 ARG BUILD_SHA
 RUN apk add --no-cache musl-dev sqlite-dev pkgconfig
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY migrations ./migrations
 COPY src ./src
 RUN test -n "$BUILD_SHA"
