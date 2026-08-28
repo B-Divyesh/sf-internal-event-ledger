@@ -14,7 +14,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, FromRow, SqlitePool};
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashSet,
+    fs::{self, OpenOptions},
+    io::{ErrorKind, Write},
+    path::{Path as FilePath, PathBuf},
+    sync::Arc,
+};
 use subtle::ConstantTimeEq;
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::GlobalKeyExtractor, GovernorLayer,
@@ -28,6 +34,79 @@ use tower_http::{
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdminTokenSource {
+    Supplied,
+    Persisted,
+    Generated,
+}
+
+impl std::fmt::Display for AdminTokenSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Supplied => "supplied",
+            Self::Persisted => "persisted",
+            Self::Generated => "generated",
+        })
+    }
+}
+
+pub fn load_or_create_admin_token(
+    supplied: Option<String>,
+    token_path: &FilePath,
+) -> anyhow::Result<(String, AdminTokenSource)> {
+    if let Some(token) = supplied.filter(|token| !token.trim().is_empty()) {
+        return Ok((token, AdminTokenSource::Supplied));
+    }
+
+    match fs::read_to_string(token_path) {
+        Ok(token) if !token.trim().is_empty() => {
+            return Ok((token.trim().to_owned(), AdminTokenSource::Persisted));
+        }
+        Ok(_) => anyhow::bail!(
+            "administrator token file is empty: {}",
+            token_path.display()
+        ),
+        Err(error) if error.kind() != ErrorKind::NotFound => return Err(error.into()),
+        Err(_) => {}
+    }
+
+    if let Some(parent) = token_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    let mut random = [0u8; 32];
+    rand::rng().fill_bytes(&mut random);
+    let token = hex::encode(random);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(token_path) {
+        Ok(mut file) => {
+            writeln!(file, "{token}")?;
+            file.sync_all()?;
+            Ok((token, AdminTokenSource::Generated))
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            let token = fs::read_to_string(token_path)?;
+            if token.trim().is_empty() {
+                anyhow::bail!(
+                    "administrator token file is empty: {}",
+                    token_path.display()
+                );
+            }
+            Ok((token.trim().to_owned(), AdminTokenSource::Persisted))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -921,6 +1000,59 @@ mod tests {
     #[test]
     fn csv_quotes_are_safe() {
         assert_eq!(csv("a,\"b\""), "\"a,\"\"b\"\"\"");
+    }
+    #[test]
+    fn administrator_token_is_generated_once_and_persisted() {
+        let directory = std::env::temp_dir().join(format!("ledger-token-{}", Uuid::new_v4()));
+        let path = directory.join("admin-token");
+        let (generated, source) = load_or_create_admin_token(None, &path).unwrap();
+        assert_eq!(source, AdminTokenSource::Generated);
+        assert_eq!(generated.len(), 64);
+        assert!(generated
+            .chars()
+            .all(|character| character.is_ascii_hexdigit()));
+
+        let (reloaded, source) = load_or_create_admin_token(None, &path).unwrap();
+        assert_eq!(source, AdminTokenSource::Persisted);
+        assert_eq!(reloaded, generated);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let _ = fs::remove_dir_all(directory);
+    }
+    #[test]
+    fn supplied_administrator_token_does_not_touch_disk() {
+        let path = std::env::temp_dir().join(format!("ledger-token-{}", Uuid::new_v4()));
+        let (token, source) =
+            load_or_create_admin_token(Some("operator-supplied".into()), &path).unwrap();
+        assert_eq!(source, AdminTokenSource::Supplied);
+        assert_eq!(token, "operator-supplied");
+        assert!(!path.exists());
+    }
+    #[tokio::test]
+    async fn health_reports_the_nonempty_compiled_build_identity() {
+        let (router, path) = new_test_router().await;
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(payload["build"], env!("BUILD_SHA"));
+        assert!(!payload["build"].as_str().unwrap().is_empty());
+        let _ = fs::remove_file(path);
     }
     #[tokio::test]
     async fn source_ingest_and_review_flow() {

@@ -1,53 +1,55 @@
-# Internal Event Ledger — repair handoff
+# Internal Event Ledger — repair 2 handoff
 
-## Repair scope
+## Outcome
 
-This repair closes every release blocker in the independent report for candidate `59301bd0d8339ac113611a23bdfdfc0946236327` while preserving the self-hosted Rust/Axum + SQLite container artifact and its receiver workflow.
+Repaired failed candidate `b9bce304da949ed8aa60096333184021bb7b6f1c` without changing its `web-with-backend` / container deployment class.
 
-- **Administrative data boundary:** every `/api/*` management, review, export, retention, settings, and license route now requires a constant-time checked `Authorization: Bearer $ADMIN_TOKEN`. `ADMIN_TOKEN` is mandatory at service startup and Compose makes it mandatory at deployment. The browser has a keyboard-accessible first-use access screen; its token stays in `sessionStorage` only. Ingest remains independently protected by each source's receiver token and optional HMAC.
-- **Server-side paid limits:** source count (five), 30-day retention, and 24-hour digest are enforced in handlers, not merely hidden in the UI. A valid Pro token is verified by the server against Sociobot, persisted with a timestamp, and used from a fresh cache for at most 24 hours. A stale failed verification safely falls back to free limits. JSON/CSV exports remain free, though they correctly require administrator access because they contain private event data.
-- **Identity and delivery:** `build.rs` stamps `BUILD_SHA`; container builds require it and the Docker build passes it to both Rust and Vite. `/health` reports that exact compile-time value. Hashed Vite assets use one-year immutable caching, while HTML and `sw.js` use `no-cache`; API, ingest, and health responses use `no-store`.
-- **PWA update policy:** the service worker cache key derives from the build identifier, calls `skipWaiting()`, claims clients, removes older ledger caches, and the client reloads once on controller change. Offline startup no longer starts API fetches, so the intended offline state is rendered without console errors.
+- The multi-stage Dockerfile now declares `ARG BUILD_SHA=dev` before the stages and consumes `BUILD_SHA` in the Vite builder, Rust builder, Alpine runtime environment, and OCI revision label. Empty or omitted values compile as `dev`; release builds preserve the complete supplied SHA. No stage reads `.git`.
+- The container no longer requires `ADMIN_TOKEN`. With only `PORT`, it generates a 256-bit token at `/data/admin-token`, writes it mode `0600`, reuses it on restart, and logs whether the token was supplied, persisted, or generated without logging its value. `ADMIN_TOKEN` remains an optional override.
+- `npm test` now includes focused Docker contract checks. Rust regressions cover generated/persisted/supplied administrator credentials and the non-empty compile-time `/health` identity.
+- Compose and README now match the same zero-required-secret runtime contract and explain how a self-hosted operator retrieves the generated administrator token.
 
-## Run and deploy
+## Failure reproduction and clean build
+
+The original Dockerfile was submitted to the same clean ACR source-tar builder used by the factory:
 
 ```sh
-npm ci
-npm test
-npx tsc --noEmit
-cargo clippy --all-targets -- -D warnings
-VITE_BUILD_SHA="$(git rev-parse HEAD)" npm run build
-BUILD_SHA="$(git rev-parse HEAD)" cargo build --locked --release
-
-export ADMIN_TOKEN="$(openssl rand -hex 32)"
-export BUILD_SHA="$(git rev-parse HEAD)"
-docker compose up --build -d
+az acr build --registry sociobotregistry --image sf-internal-event-ledger:repair-repro-b9bce304 --file Dockerfile .
 ```
 
-Use the displayed administrator token at first visit. For an API smoke request, add `Authorization: Bearer "$ADMIN_TOKEN"`. Do not use a receiver token for administrative APIs.
+ACR run `chaf` explicitly reported that `.git` was excluded, then failed at Dockerfile step 7, `RUN test -n "$BUILD_SHA"`, with exit code 1.
+
+After the repair, the identical no-build-argument command (tag changed only to preserve the evidence image) passed as ACR run `chb3`:
+
+```sh
+az acr build --registry sociobotregistry --image sf-internal-event-ledger:repair-clean-default --file Dockerfile .
+```
+
+Result: success, digest `sha256:4ea6e5aba47751944ff65782009969d55e9677e34c305df9e9f75a6797495573`. The logs again confirmed `.git` exclusion. Both builders used their safe `dev` fallback.
 
 ## Verification evidence
 
-Executed from a clean `npm ci` installation on 2026-08-28 UTC:
+Executed on 2026-08-28 UTC:
 
-- `npm test` passed: 3 Vitest tests and 7 Rust tests. New Rust HTTP regressions cover unauthenticated reads/exports/mutations/deletions/retention, authenticated source creation, direct free-plan source/retention/digest bypass attempts, a fresh server-verified Pro cache, and exact immutable/no-cache response headers.
-- `npx tsc --noEmit` passed. `cargo clippy --all-targets -- -D warnings` passed. `BUILD_SHA=0d33ce97dfea6326e1b16c2a3b882b4988de3d6f cargo build --locked --release` passed; local `/health` returned that exact build identity.
-- Production Vite build passed. Delivered assets: JS 31.24 KB (10.40 KB gzip), CSS 12.86 KB (3.86 KB gzip), existing WebP 61.86 KB. Playwright is pinned to `1.58.2`.
-- Local release-binary response checks: unauthenticated `/api/sources`, `/api/events`, `/api/export`, `/api/settings`, `/api/digest`, and retention each returned 401; an authenticated source read returned 200. Hashed JS returned `Cache-Control: public, max-age=31536000, immutable`; `/` and `/sw.js` returned `no-cache`; health/API data returned `no-store`.
-- Playwright end-to-end at 390×844 passed: administrator unlock → source creation → token-authenticated ingest → inbox acknowledge → digest → privacy, with zero console errors. Desktop 1366×900 and mobile 390×844 both had one h1, no horizontal overflow, zero console/page errors, and a keyboard-focused skip link. Axe WCAG 2 A/AA, WCAG 2.1 AA, and best-practice scan found zero violations.
-- PWA check at 390px: a controlled worker cached `ledger-shell-0d33ce97dfea6326e1b16c2a3b882b4988de3d6f`; after forcing offline, reload rendered `Event ledger` with zero console errors.
-- Local mobile Lighthouse on the initial administrator-access screen: Performance 100, Accessibility 100, Best Practices 100, SEO 100. Raw report: `.factory/evidence/lighthouse-repair.json`.
-- Privacy/source review found no trackers, CDN fonts, or third-party browser runtime requests. The only declared external endpoint is the Sociobot license API, allowed by CSP and used server-side for license verification.
+- `npm ci`: 60 packages installed; zero audit vulnerabilities.
+- `npm test`: 3 Vitest tests, 2 Node Docker-contract tests, and 10 Rust unit/integration tests passed.
+- `cargo fmt --check`, `npx tsc --noEmit`, and `cargo clippy --all-targets -- -D warnings`: passed.
+- `npm run build`: passed and produced `dist/`; initial assets are 31,206 B JS, 12,861 B CSS, and 61,858 B WebP.
+- `npm audit --omit=dev`: zero vulnerabilities.
+- `BUILD_SHA=b9bce304da949ed8aa60096333184021bb7b6f1c cargo build --locked --release`: passed. The release binary was started under `env -i` with only `PATH` and `PORT=18080`; it generated a mode-`0600` token, served `/` with 200, protected `/api/sources` with 401, and `/health` returned `{"build":"b9bce304da949ed8aa60096333184021bb7b6f1c","status":"ok"}`.
+- `npm run test:e2e`: passed the mobile administrator unlock → source creation → authenticated ingest → inbox acknowledgement → digest → privacy workflow with zero console errors.
+- `npm run test:a11y`: zero Axe violations for WCAG 2 A/AA, WCAG 2.1 AA, and best practice rules.
+- `/opt/fleet/lib/verify-url.sh`: passed title, `lang`, one `h1`, main landmark, image alt, button naming, console, desktop, and mobile checks. Evidence is in `.factory/evidence/repair-2-local/`.
+- Additional Playwright checks at 1366×900 and 390×844 passed keyboard Tab/Enter unlock, one `h1`, main landmark, no horizontal overflow, no console/page errors, same-origin-only browser requests, the privacy route, service-worker control/update with no waiting worker, and a successful offline reload. Reduced-motion mode was used.
+- Mobile Lighthouse performance: 100; FCP 0.0 s, LCP 0.1 s, TBT 0 ms, CLS 0. Raw report: `.factory/evidence/lighthouse-repair-2.json`. Existing full-category evidence remains under `.factory/evidence/`.
+- Privacy review: no analytics, trackers, remote fonts, CDNs, or browser-side payment provider. The only declared external product endpoint is the Sociobot license API.
 
-## Deployment evidence
+## Deployment and live identity
 
-- ACR build `ch89` succeeded for immutable image `sociobotregistry.azurecr.io/sf-internal-event-ledger:6527359b84212aab696f35d3274872326462782d`, with that SHA supplied as Docker `BUILD_SHA`.
-- The existing factory Container App was updated to that image with a newly generated `admin-token` secret referenced only at runtime as `ADMIN_TOKEN`; the secret value was not written to source control or this handoff.
-- Live URL `https://internal-event-ledger.sociobot.in` returned `{"build":"6527359b84212aab696f35d3274872326462782d","status":"ok"}` from `/health`. Unauthenticated live reads (`/api/sources`, `/api/events`, CSV export) and source-create, event-patch, source-delete, and retention-post requests each returned 401. The live hashed Vite JS returned `Cache-Control: public, max-age=31536000, immutable`; live `/sw.js` returned `no-cache`.
-- A fresh live Playwright 390px check on the access boundary found one h1, no horizontal overflow, zero console/page errors, and zero Axe WCAG 2 A/AA, WCAG 2.1 AA, and best-practice violations.
+Deployment evidence is recorded below after the committed repair is built and released through the work-order container configuration.
 
-## Known operational notes
+## Operational notes
 
-- The browser access token is intentionally session-only. Operators need the deployment's `ADMIN_TOKEN` to open a new tab or browser.
-- SQLite volume backups remain the operator's responsibility. The app runs non-root and does not include analytics.
-- Docker is not installed in this worker, so the local image could not be built here. The first ACR build caught and this repair corrects the missing `build.rs` Docker copy; the replacement ACR build is the deployment-level image verification.
+- `/data` must be persistent for both SQLite data and stable generated administrator access. `ADMIN_TOKEN` may be supplied by operators who manage secrets externally.
+- The application deliberately does not print generated token values. Retrieve it from the mounted volume (`docker compose exec ledger cat /data/admin-token`).
+- SQLite backups remain the operator’s responsibility.

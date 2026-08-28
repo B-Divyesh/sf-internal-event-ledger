@@ -8,22 +8,24 @@ This is not a pager, retrying webhook proxy, automation engine, or guaranteed-de
 
 ## Run with Docker
 
-The smallest deployment uses the included Compose file and a persistent SQLite volume. Generate a long random administrator token and record the commit being deployed first; both values are mandatory:
+The smallest deployment uses the included Compose file and a persistent SQLite volume. The build identity defaults to `dev` locally, and the service generates a 256-bit administrator token on first boot when one is not supplied:
 
 ```sh
-export ADMIN_TOKEN="$(openssl rand -hex 32)"
-export BUILD_SHA="$(git rev-parse HEAD)"
 docker compose up --build -d
+docker compose exec ledger cat /data/admin-token
 ```
 
-Open `http://localhost:8080`. The container runs as a non-root user and stores its database at `/data/ledger.db`. On first visit, enter `ADMIN_TOKEN` in the Administrator access screen. It is retained only for that browser tab.
+Open `http://localhost:8080`. The container runs as a non-root user and stores its database and generated administrator token under `/data`. Enter the token in the Administrator access screen; it is retained only for that browser tab. Set `ADMIN_TOKEN` to override generation, and set `BUILD_SHA` to stamp a release image.
 
 To build and run the image directly:
 
 ```sh
-docker build --build-arg BUILD_SHA="$(git rev-parse HEAD)" -t internal-event-ledger .
-docker run --rm -e ADMIN_TOKEN="$(openssl rand -hex 32)" -p 8080:8080 -v ledger-data:/data internal-event-ledger
+docker build -t internal-event-ledger .
+docker run --name internal-event-ledger -e PORT=8080 -p 8080:8080 -v ledger-data:/data internal-event-ledger
+docker exec internal-event-ledger cat /data/admin-token
 ```
+
+Release builds should pass the full source identity without relying on `.git`: `docker build --build-arg BUILD_SHA=<full-commit-sha> ...`.
 
 ## Develop and verify
 
@@ -42,7 +44,7 @@ For a production-like local run:
 
 ```sh
 npm run build
-ADMIN_TOKEN='local-development-token' DATABASE_URL='sqlite://ledger.db?mode=rwc' cargo run --release
+PORT=8080 cargo run --release
 ```
 
 Configuration is environment-only:
@@ -53,9 +55,10 @@ Configuration is environment-only:
 | `DATABASE_URL` | `sqlite://ledger.db?mode=rwc` | SQLite location |
 | `STATIC_DIR` | `dist` | Built frontend location |
 | `RUST_LOG` | JSON info logs | Tracing filter |
-| `ADMIN_TOKEN` | required | High-entropy token required for all administrative browser and API access |
+| `ADMIN_TOKEN` | generated and persisted | Optional high-entropy override for administrative browser and API access |
+| `ADMIN_TOKEN_FILE` | `.internal-event-ledger-admin-token` natively; `/data/admin-token` in the image | Generated-token location |
 | `BILLING_API_BASE` | Sociobot production API | Server-side Pro license verification endpoint (override for staging) |
-| `BUILD_SHA` | `dev` for native development | Compile-time `/health` identity; mandatory for container builds |
+| `BUILD_SHA` | `dev` | Compile-time `/health` identity; release builds pass the full commit SHA as a build argument |
 
 ## Receive events
 

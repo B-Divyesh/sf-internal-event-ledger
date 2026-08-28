@@ -3,9 +3,7 @@ services:
     build:
       context: .
       args:
-        BUILD_SHA: ${BUILD_SHA:?Set BUILD_SHA to the commit being deployed}
-    environment:
-      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set a high-entropy ADMIN_TOKEN before deployment}
+        BUILD_SHA: ${BUILD_SHA:-dev}
     ports:
       - "8080:8080"
     volumes:
