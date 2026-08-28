@@ -8,6 +8,7 @@ Repaired failed candidate `b9bce304da949ed8aa60096333184021bb7b6f1c` without cha
 - The container no longer requires `ADMIN_TOKEN`. With only `PORT`, it generates a 256-bit token at `/data/admin-token`, writes it mode `0600`, reuses it on restart, and logs whether the token was supplied, persisted, or generated without logging its value. `ADMIN_TOKEN` remains an optional override.
 - `npm test` now includes focused Docker contract checks. Rust regressions cover generated/persisted/supplied administrator credentials and the non-empty compile-time `/health` identity.
 - Compose and README now match the same zero-required-secret runtime contract and explain how a self-hosted operator retrieves the generated administrator token.
+- Logged-out visitors can read `/privacy` and `/terms`; administrative views remain protected.
 
 ## Failure reproduction and clean build
 
@@ -32,7 +33,7 @@ Result: success, digest `sha256:4ea6e5aba47751944ff65782009969d55e9677e34c305df9
 Executed on 2026-08-28 UTC:
 
 - `npm ci`: 60 packages installed; zero audit vulnerabilities.
-- `npm test`: 3 Vitest tests, 2 Node Docker-contract tests, and 10 Rust unit/integration tests passed.
+- `npm test`: 4 Vitest tests, 2 Node Docker-contract tests, and 10 Rust unit/integration tests passed.
 - `cargo fmt --check`, `npx tsc --noEmit`, and `cargo clippy --all-targets -- -D warnings`: passed.
 - `npm run build`: passed and produced `dist/`; initial assets are 31,206 B JS, 12,861 B CSS, and 61,858 B WebP.
 - `npm audit --omit=dev`: zero vulnerabilities.
@@ -46,7 +47,21 @@ Executed on 2026-08-28 UTC:
 
 ## Deployment and live identity
 
-Deployment evidence is recorded below after the committed repair is built and released through the work-order container configuration.
+The pushed repair was deployed with the original work-order configuration:
+
+```sh
+/opt/fleet/lib/deploy-container.sh internal-event-ledger /work/repo Dockerfile 8080
+```
+
+- Final source: `72b79148677691198b46fd3e5bb13bff4aa552f0` on `origin/main`.
+- ACR run `chbn` passed the clean source-tar build with full `BUILD_SHA`, `GIT_SHA`, and `SOURCE_COMMIT` build arguments. Image: `sociobotregistry.azurecr.io/sf-internal-event-ledger:72b791486776`; digest: `sha256:ddf095e616f67bc3d7115fd6177bf40768acf7bdc39133e778014af87aeb5137`.
+- Azure Container App revision `sf-internal-event-ledger--0000004` is ready. Its runtime configuration contains exactly `PORT=8080` and no secrets.
+- Live `GET https://internal-event-ledger.sociobot.in/health` returned `{"build":"72b79148677691198b46fd3e5bb13bff4aa552f0","status":"ok"}`.
+- Live anonymous reads, export, source creation/deletion, event mutation, and retention mutation all returned 401. A 100-request concurrent `/health` smoke returned 100 × 200.
+- The factory URL verifier passed the live title, language, landmark, image, control-name, desktop/mobile, and console checks. Evidence is in `.factory/evidence/repair-2-live/`.
+- Live desktop and 390px mobile Playwright checks found one `h1`, a main landmark, no horizontal overflow, no page/console errors, no external browser requests, and zero Axe violations on the access, privacy, and terms screens. The skip link was first in keyboard order.
+- The live service worker controlled the page, had no waiting update, used cache `ledger-shell-72b79148677691198b46fd3e5bb13bff4aa552f0`, and served the shell offline without errors.
+- Live hashed JS returned `Cache-Control: public, max-age=31536000, immutable`; HTML returned `no-cache`. Security headers include CSP, frame denial, no-sniff, no-referrer, and restrictive permissions policy.
 
 ## Operational notes
 
