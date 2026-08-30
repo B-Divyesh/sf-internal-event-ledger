@@ -136,12 +136,15 @@ async fn open_runtime_pools(
     let mut attempt = 0u64;
     loop {
         attempt += 1;
-        let error = match create_pool(database_url).await {
+        let error = match create_pool(database_url)
+            .await
+            .map_err(|error| anyhow::anyhow!("ledger SQLite: {error}"))
+        {
             Ok(pool) => match create_rate_limit_pool(database_url).await {
                 Ok(rate_limit_pool) => return Ok((pool, rate_limit_pool)),
                 Err(error) => {
                     drop(pool);
-                    error
+                    anyhow::anyhow!("rate-limit SQLite: {error}")
                 }
             },
             Err(error) => error,
