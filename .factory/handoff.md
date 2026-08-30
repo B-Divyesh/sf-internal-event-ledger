@@ -87,10 +87,20 @@ deployment build. The Lighthouse CLI is also unavailable locally; no score is
 claimed. The build-size budget, browser performance smoke, and accessibility
 checks above did run locally.
 
-An initial scoped rollout exposed the legacy file-lock condition described
-above; no data was changed. The startup-order repair has local regression and
-browser evidence. The final scoped deployment and live identity check are
-recorded after this source commit is pushed.
+The scoped image was built and deployed repeatedly through the factory
+workflow. The final source image is `21d721c40e6792eadc914eb52f131829baba1d85`
+(factory build `ch1my`), and it is the target's latest revision. The public
+endpoint currently returns the intentional startup `503`, not a false healthy
+response. Its target-local log reports SQLite code 5 (`database is locked`) on
+the ledger pool even though the target revision list shows no older running
+ledger revision.
+
+This is the remaining release blocker. Local fresh SQLite, all claim sandboxes,
+and local browser checks pass; the mounted target share retains a file-lock
+condition that this product cannot clear safely without destructive storage
+intervention. The repair deliberately did not delete or alter any non-empty
+file. An operator should repair the target's mounted share/lease, then rerun
+the final factory deployment and verify `/health` reports the final build SHA.
 
 ## How to run
 
