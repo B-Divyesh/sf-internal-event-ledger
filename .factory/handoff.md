@@ -27,8 +27,9 @@ that the controller flagged. Runtime state is SQLite only, persisted under
   `Retry-After` and retries without retaining a failed connection. It switches
   to the real ledger as soon as the durable file is available.
 - Recover a narrowly defined interrupted first-boot artifact: only a
-  zero-byte SQLite file's sibling rollback journal is removed before opening
-  the database. A non-empty ledger is never altered by this recovery path.
+  zero-byte SQLite placeholder and its sibling rollback journal are removed
+  before opening the database. A non-empty ledger is never altered by this
+  recovery path.
 - Added `scripts/forbidden-resource.test.mjs` and `npm run
   test:forbidden-resources`. It recursively checks repository source,
   configuration, documentation, and test files for prohibited service,

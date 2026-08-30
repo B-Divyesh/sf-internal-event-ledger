@@ -227,6 +227,7 @@ fn clear_empty_database_journal(url: &str) -> anyhow::Result<()> {
     if journal_path.is_file() {
         fs::remove_file(journal_path)?;
     }
+    fs::remove_file(database_path)?;
     Ok(())
 }
 
@@ -1438,6 +1439,7 @@ mod tests {
 
         let pool = create_pool(&url).await.unwrap();
         assert!(!journal_path.exists());
+        assert!(std::fs::metadata(&path).unwrap().len() > 0);
         assert!(table_exists(&pool, "sources").await.unwrap());
         pool.close().await;
 
