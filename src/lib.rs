@@ -201,7 +201,10 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
     clear_empty_database_journal(url)?;
     let options = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
     let pool = SqlitePoolOptions::new()
-        .max_connections(8)
+        // The deployment is intentionally a single SQLite writer. One
+        // connection prevents first-boot schema work from contending with an
+        // idle connection on mounted file storage.
+        .max_connections(1)
         .after_connect(|connection, _| {
             Box::pin(async move {
                 sqlx::query("PRAGMA busy_timeout = 5000")
