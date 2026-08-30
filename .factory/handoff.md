@@ -61,6 +61,8 @@ Local evidence:
 - Live response-policy checks passed for `/`, `/demo`, `/privacy`, `/terms`, `/health`, and the designed 404. Security headers were present, app HTML revalidated, health/API responses used `no-store`, and hashed assets remained immutable.
 - `robots.txt`, `sitemap.xml`, and every rendered internal/external link resolved. Checkout returned 303 to the hosted Dodo origin. A known-invalid license returned `{valid:false, reason:"invalid"}`.
 - Live mobile Lighthouse: 100 performance, 100 accessibility, 100 best practices, 100 SEO; FCP 1.35 s, LCP 1.65 s, CLS 0, TBT 0, total transfer 124,050 bytes.
+- Final identity rollout `ch1ft` deployed handoff snapshot `e273245f15180990e4778a581174155c5d6e6398` as revision `0000017`; `/health`, local HEAD, and remote `main` matched. A post-rollout 390px smoke retained all five sample groups, Digest/Back focus, zero console errors, and a 75-request management burst returned 61×401 plus 14×429 with `Retry-After`.
+- That final probe exposed a shared Sociobot API outage: PgBouncer on port 6432 had retained another product's schema-only `search_path`, so every public product query returned 500 despite intact `public` tables. The `sociobot-v2` runtime connection alone was moved to direct Azure PostgreSQL port 5432; migration access was already direct. After restart the 214-product catalog, this product's 303 checkout, and fail-closed invalid-license verification all passed, while the API app reported `Running` / `Normal`.
 
 Live evidence:
 
