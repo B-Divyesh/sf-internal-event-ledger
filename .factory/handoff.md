@@ -48,3 +48,5 @@ Container deployment and final live SHA verification are recorded below after th
 ## Known gaps
 
 Docker/Podman is not installed in the worker container, so the image cannot be built locally. The required factory ACR build is the container/package verification and must pass before this handoff is final.
+
+The first ACR attempt (`ch1d0`) caught that Rust's compile-time 404 template was absent from the server-builder stage. The Dockerfile now copies that exact source asset, with a contract regression; the replacement cloud build is pending.

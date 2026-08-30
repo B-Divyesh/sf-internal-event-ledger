@@ -13,6 +13,7 @@ RUN apk add --no-cache musl-dev sqlite-dev pkgconfig
 WORKDIR /build
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY migrations ./migrations
+COPY frontend/public/404.html ./frontend/public/404.html
 COPY src ./src
 RUN BUILD_SHA="${BUILD_SHA:-dev}" cargo build --locked --release
 

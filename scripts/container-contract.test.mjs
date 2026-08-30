@@ -13,6 +13,7 @@ test('container build identity defaults safely and never reads git metadata', ()
   assert.match(dockerfile, /VITE_BUILD_SHA="\$\{BUILD_SHA:-dev\}" npm run build/);
   assert.match(dockerfile, /BUILD_SHA="\$\{BUILD_SHA:-dev\}" cargo build --locked --release/);
   assert.match(dockerfile, /^FROM rust:1-alpine AS server-builder$/m);
+  assert.match(dockerfile, /COPY frontend\/public\/404\.html \.\/frontend\/public\/404\.html/);
   assert.doesNotMatch(dockerfile, /^FROM rust:1\.\d+/m);
 });
 
