@@ -109,6 +109,6 @@
     "claim": "Management and receiver API clients are rate limited and receive Retry-After when limited.",
     "where": "README security section",
     "test": "npm run test:claims -- --grep @claim:api-rate-limit",
-    "sandbox": "two server processes sharing one SQLite database; split a concurrent 120-request burst from one forwarded client across both; assert one shared 60-request allowance, 429, and Retry-After"
+    "sandbox": "two server processes sharing one SQLite database; split a concurrent 120-request burst from one forwarded client across both; assert one shared 60-token burst plus only the measured refill, 429, and Retry-After"
   }
 ]

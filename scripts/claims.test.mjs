@@ -415,14 +415,20 @@ claim('api-rate-limit', async () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       if (attempt === 99) throw new Error(`second limiter replica did not start\n${replicaOutput}`);
     }
+    const burstStartedAt = performance.now();
     const responses = await Promise.all(Array.from({ length: 120 }, (_, index) => {
       const origin = index % 2 ? base : `http://127.0.0.1:${replicaPort}`;
       return fetch(`${origin}/api/events`, { headers: { authorization: `Bearer ${adminToken}`, 'x-forwarded-for': '203.0.113.90' } });
     }));
+    const burstElapsedSeconds = (performance.now() - burstStartedAt) / 1000;
     const allowed = responses.filter((response) => response.status === 200).length;
     const limited = responses.filter((response) => response.status === 429);
-    assert.ok(allowed >= 58 && allowed <= 62, `shared 60-request burst allowed ${allowed}`);
-    assert.ok(limited.length >= 58);
+    const maximumWithMeasuredRefill = 60 + Math.ceil(burstElapsedSeconds * 20) + 1;
+    assert.ok(
+      allowed >= 60 && allowed <= maximumWithMeasuredRefill,
+      `shared 60-token burst allowed ${allowed} in ${burstElapsedSeconds.toFixed(3)}s (maximum ${maximumWithMeasuredRefill})`,
+    );
+    assert.ok(limited.length >= 120 - maximumWithMeasuredRefill);
     assert.ok(limited.every((response) => response.headers.get('retry-after') === '1'));
   } finally {
     replica.kill('SIGTERM');
