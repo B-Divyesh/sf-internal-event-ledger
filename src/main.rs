@@ -1,4 +1,6 @@
-use internal_event_ledger::{app, create_pool, load_or_create_admin_token, AppState};
+use internal_event_ledger::{
+    app, create_pool, create_rate_limit_pool, load_or_create_admin_token, AppState,
+};
 use std::{
     collections::HashSet,
     env,
@@ -32,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let (admin_token, admin_token_source) =
         load_or_create_admin_token(env::var("ADMIN_TOKEN").ok(), &admin_token_path)?;
     let pool = create_pool(&database_url).await?;
+    let rate_limit_pool = create_rate_limit_pool(&database_url).await?;
     let trusted_proxy_ips: HashSet<IpAddr> = env::var("TRUSTED_PROXY_IPS")
         .ok()
         .into_iter()
@@ -48,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
     let managed_ingress =
         env::var("CONTAINER_APP_NAME").is_ok() && env::var("CONTAINER_APP_REVISION").is_ok();
     let state = AppState::new(pool, admin_token)
+        .with_rate_limit_pool(rate_limit_pool)
         .with_trusted_proxy_ips(trusted_proxy_ips)
         .with_managed_ingress(managed_ingress);
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;

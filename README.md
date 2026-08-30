@@ -21,7 +21,7 @@ docker compose up --build -d
 docker compose exec ledger cat /data/admin-token
 ```
 
-Open `http://localhost:8080`. The container runs as a non-root user and stores its database and generated administrator token under `/data`. Enter the token in **Open your ledger**; it is retained only for that browser tab. Set `ADMIN_TOKEN` to override generation, and set `BUILD_SHA` to stamp a release image.
+Open `http://localhost:8080`. The container runs as a non-root user and stores its ledger database, rate-limit SQLite sidecar, and generated administrator token under `/data`. Enter the token in **Open your ledger**; it is retained only for that browser tab. Set `ADMIN_TOKEN` to override generation, and set `BUILD_SHA` to stamp a release image.
 
 To build and run the image directly:
 
@@ -58,7 +58,7 @@ Configuration is environment-only:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port |
-| `DATABASE_URL` | `sqlite://ledger.db?mode=rwc` | SQLite location |
+| `DATABASE_URL` | `sqlite://ledger.db?mode=rwc` | Ledger SQLite location; the shared rate limiter derives a sibling `*-rate-limits.db` file |
 | `STATIC_DIR` | `dist` | Built frontend location |
 | `RUST_LOG` | JSON info logs | Tracing filter |
 | `ADMIN_TOKEN` | generated and persisted | Optional high-entropy override for administrative browser and API access |
@@ -92,7 +92,7 @@ All management APIs, exports, event review, settings, and retention require `Aut
 
 ## Privacy and security
 
-There are no analytics, trackers, third-party fonts, runtime CDN assets, billing calls, or identity calls. Operational data stays in the deployment’s SQLite database. Read the in-product `/privacy` and `/terms` pages for the full notices.
+There are no analytics, trackers, third-party fonts, runtime CDN assets, billing calls, or identity calls. Operational data stays in the deployment’s SQLite files under `/data`. Read the in-product `/privacy` and `/terms` pages for the full notices.
 
 Back up the `/data` volume and place the service behind HTTPS. The application itself enforces an administrator boundary; a reverse-proxy identity layer can be added as defense in depth. Ingest endpoints have individual high-entropy tokens; HMAC is recommended when the sender supports it. Every API client is rate limited before authentication and receives `429` with `Retry-After` when the allowance is spent. Authenticated deliveries also have a separate receiver quota, so unauthenticated traffic cannot spend it. Private and loopback ingress peers use the first forwarded address; public peers must be listed in `TRUSTED_PROXY_IPS`. Hashed frontend assets are immutable-cached, while HTML and `sw.js` revalidate.
 

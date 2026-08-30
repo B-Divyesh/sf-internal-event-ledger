@@ -113,6 +113,7 @@ pub fn load_or_create_admin_token(
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
+    rate_limit_pool: SqlitePool,
     admin_token: Arc<str>,
     ingest_limits: Arc<Mutex<HashMap<String, IngestBucket>>>,
     trusted_proxy_ips: Arc<HashSet<IpAddr>>,
@@ -127,6 +128,7 @@ struct IngestBucket {
 impl AppState {
     pub fn new(pool: SqlitePool, admin_token: String) -> Self {
         Self {
+            rate_limit_pool: pool.clone(),
             pool,
             admin_token: Arc::from(admin_token),
             ingest_limits: Arc::new(Mutex::new(HashMap::new())),
@@ -144,9 +146,45 @@ impl AppState {
         self.trust_managed_ingress = enabled;
         self
     }
+
+    pub fn with_rate_limit_pool(mut self, rate_limit_pool: SqlitePool) -> Self {
+        self.rate_limit_pool = rate_limit_pool;
+        self
+    }
 }
 
 pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
+    let pool = open_pool(url).await?;
+
+    // A rolling deployment starts the new revision alongside the old one. Do
+    // not issue `CREATE … IF NOT EXISTS` against a ledger that is already
+    // initialized: SQLite treats that as a write and it can contend with the
+    // serving revision on the durable /data volume. New databases still get
+    // the complete schema before the application accepts requests.
+    if !table_exists(&pool, "sources").await? {
+        sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
+            .execute(&pool)
+            .await?;
+        sqlx::raw_sql(include_str!(
+            "../migrations/0002_shared_ephemeral_state.sql"
+        ))
+        .execute(&pool)
+        .await?;
+    }
+    Ok(pool)
+}
+
+pub async fn create_rate_limit_pool(ledger_url: &str) -> anyhow::Result<SqlitePool> {
+    let pool = open_pool(&rate_limit_database_url(ledger_url)).await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0002_shared_ephemeral_state.sql"
+    ))
+    .execute(&pool)
+    .await?;
+    Ok(pool)
+}
+
+async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
     let pool = SqlitePoolOptions::new()
         .max_connections(8)
         .after_connect(|connection, _| {
@@ -159,24 +197,6 @@ pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
         })
         .connect(url)
         .await?;
-
-    // A rolling deployment starts the new revision alongside the old one. Do
-    // not issue `CREATE … IF NOT EXISTS` against a ledger that is already
-    // initialized: SQLite treats that as a write and it can contend with the
-    // serving revision on the durable /data volume. New databases still get
-    // the complete schema before the application accepts requests.
-    if !table_exists(&pool, "sources").await? {
-        sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
-            .execute(&pool)
-            .await?;
-    }
-    if !table_exists(&pool, "request_rate_limits").await? {
-        sqlx::raw_sql(include_str!(
-            "../migrations/0002_shared_ephemeral_state.sql"
-        ))
-        .execute(&pool)
-        .await?;
-    }
     Ok(pool)
 }
 
@@ -188,6 +208,25 @@ async fn table_exists(pool: &SqlitePool, table: &str) -> anyhow::Result<bool> {
     .fetch_one(pool)
     .await?
         != 0)
+}
+
+fn rate_limit_database_url(ledger_url: &str) -> String {
+    let ledger_path = ledger_url
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or(ledger_url)
+        .strip_prefix("sqlite://")
+        .map(FilePath::new);
+    let Some(ledger_path) = ledger_path else {
+        return "sqlite://ledger-rate-limits.db?mode=rwc".into();
+    };
+    let stem = ledger_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("ledger");
+    let sidecar = ledger_path.with_file_name(format!("{stem}-rate-limits.db"));
+    format!("sqlite://{}?mode=rwc", sidecar.display())
 }
 
 pub fn app(state: AppState, static_dir: PathBuf) -> Router {
@@ -362,10 +401,11 @@ async fn limit_api_requests(
     next: Next,
 ) -> Response {
     let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    let allowed = match take_shared_request_token(&state.pool, "api", address, 60.0, 20.0).await {
-        Ok(allowed) => allowed,
-        Err(error) => return error.into_response(),
-    };
+    let allowed =
+        match take_shared_request_token(&state.rate_limit_pool, "api", address, 60.0, 20.0).await {
+            Ok(allowed) => allowed,
+            Err(error) => return error.into_response(),
+        };
     if !allowed {
         return ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -384,11 +424,13 @@ async fn limit_ingest_requests(
     next: Next,
 ) -> Response {
     let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    let allowed = match take_shared_request_token(&state.pool, "ingest", address, 240.0, 40.0).await
-    {
-        Ok(allowed) => allowed,
-        Err(error) => return error.into_response(),
-    };
+    let allowed =
+        match take_shared_request_token(&state.rate_limit_pool, "ingest", address, 240.0, 40.0)
+            .await
+        {
+            Ok(allowed) => allowed,
+            Err(error) => return error.into_response(),
+        };
     if !allowed {
         return ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -478,7 +520,15 @@ async fn create_demo(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    if !take_shared_request_token(&state.pool, "demo-create", address, 10.0, 1.0 / 60.0).await? {
+    if !take_shared_request_token(
+        &state.rate_limit_pool,
+        "demo-create",
+        address,
+        10.0,
+        1.0 / 60.0,
+    )
+    .await?
+    {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "This client created too many demos. Try again shortly.".into(),
@@ -1253,10 +1303,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn existing_ledger_starts_while_a_writer_holds_the_database_lock() {
+    async fn legacy_ledger_starts_while_a_writer_holds_the_database_lock() {
         let path = std::env::temp_dir().join(format!("ledger-rollout-{}.db", Uuid::new_v4()));
         let url = format!("sqlite://{}?mode=rwc", path.display());
         let initial_pool = create_pool(&url).await.unwrap();
+        sqlx::query("DROP TABLE demo_workspaces")
+            .execute(&initial_pool)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE request_rate_limits")
+            .execute(&initial_pool)
+            .await
+            .unwrap();
         initial_pool.close().await;
 
         let mut writer = SqliteConnection::connect(&url).await.unwrap();
@@ -1272,13 +1330,29 @@ mod tests {
         let reopened =
             tokio::time::timeout(std::time::Duration::from_millis(750), create_pool(&url))
                 .await
-                .expect("an existing schema must not run write migrations during rollout")
+                .expect("a legacy ledger must not run write migrations during rollout")
                 .unwrap();
+        assert!(!table_exists(&reopened, "request_rate_limits")
+            .await
+            .unwrap());
         reopened.close().await;
+
+        let rate_limit_pool = create_rate_limit_pool(&url).await.unwrap();
+        assert!(table_exists(&rate_limit_pool, "request_rate_limits")
+            .await
+            .unwrap());
+        rate_limit_pool.close().await;
 
         sqlx::query("ROLLBACK").execute(&mut writer).await.unwrap();
         drop(writer);
+        let rate_limit_url = rate_limit_database_url(&url);
+        let rate_limit_path = rate_limit_url
+            .trim_start_matches("sqlite://")
+            .split('?')
+            .next()
+            .unwrap();
         let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(rate_limit_path);
     }
 
     #[test]

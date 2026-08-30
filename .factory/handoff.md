@@ -17,6 +17,11 @@ that the controller flagged. Runtime state is SQLite only, persisted under
 - Made the former gated controls ordinary local product controls: any number
   of sources, 1–3,650 day retention, and 1–168 hour digest windows. They are
   stored only in this product's SQLite database.
+- Made rolling startup safe for an established `/data` volume. The ledger
+  avoids schema writes when its existing tables are present; the shared API
+  limiter uses its own sibling SQLite sidecar (`ledger-rate-limits.db`), so a
+  legacy ledger can come online before an older revision releases its file
+  lock.
 - Added `scripts/forbidden-resource.test.mjs` and `npm run
   test:forbidden-resources`. It recursively checks repository source,
   configuration, documentation, and test files for prohibited service,
@@ -38,7 +43,7 @@ All checks below ran from this clean working tree on 2026-08-30.
 
 - `npm ci` — installed 60 packages; audit found 0 vulnerabilities.
 - `npm test` — passed: 4 frontend unit tests, 4 repository/contract scans,
-  18 Rust tests, and all 14 observable product claims.
+  19 Rust tests, and all 14 observable product claims.
 - `npx tsc --noEmit`, `cargo fmt --check`, and `cargo clippy --locked
   --all-targets -- -D warnings` — passed.
 - `VITE_BUILD_SHA=repair-7-local npm run build` — passed. The built initial
@@ -58,8 +63,9 @@ All checks below ran from this clean working tree on 2026-08-30.
   connection policy, immutable hashed asset caching, the designed 404 page,
   offline demo reload, and shared limiter `429` plus `Retry-After` behavior.
 
-Evidence is retained in `.factory/evidence/repair-7-local/`, including desktop
-and 390 px screenshots and the structured URL check result.
+Evidence is retained in `.factory/evidence/repair-7-local/` and
+`.factory/evidence/repair-7-local-final/`, including desktop and 390 px
+screenshots and structured URL check results.
 
 ## Container and deployment
 
@@ -83,4 +89,5 @@ BUILD_SHA=dev cargo run --release
 
 Open `http://127.0.0.1:8080/demo` for the isolated sample workspace. The
 server starts with only `PORT`; it generates and persists its administrator
-token beside its SQLite state under `/data` when that mount is available.
+token beside its ledger and rate-limit SQLite state under `/data` when that
+mount is available.
