@@ -1,0 +1,14 @@
+{
+  "url": "https://internal-event-ledger.sociobot.in",
+  "loadMs": 660,
+  "errors": [],
+  "a11y": {
+    "title": "Internal Event Ledger — review webhook events",
+    "lang": "en",
+    "h1": 1,
+    "main": true,
+    "imgsMissingAlt": 0,
+    "buttonsUnlabeled": 0,
+    "textLength": 1717
+  }
+}
