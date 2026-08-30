@@ -159,13 +159,35 @@ pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
         })
         .connect(url)
         .await?;
-    for migration in [
-        include_str!("../migrations/0001_init.sql"),
-        include_str!("../migrations/0002_shared_ephemeral_state.sql"),
-    ] {
-        sqlx::raw_sql(migration).execute(&pool).await?;
+
+    // A rolling deployment starts the new revision alongside the old one. Do
+    // not issue `CREATE … IF NOT EXISTS` against a ledger that is already
+    // initialized: SQLite treats that as a write and it can contend with the
+    // serving revision on the durable /data volume. New databases still get
+    // the complete schema before the application accepts requests.
+    if !table_exists(&pool, "sources").await? {
+        sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
+            .execute(&pool)
+            .await?;
+    }
+    if !table_exists(&pool, "request_rate_limits").await? {
+        sqlx::raw_sql(include_str!(
+            "../migrations/0002_shared_ephemeral_state.sql"
+        ))
+        .execute(&pool)
+        .await?;
     }
     Ok(pool)
+}
+
+async fn table_exists(pool: &SqlitePool, table: &str) -> anyhow::Result<bool> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await?
+        != 0)
 }
 
 pub fn app(state: AppState, static_dir: PathBuf) -> Router {
@@ -1193,6 +1215,7 @@ mod tests {
     use super::*;
     use axum::http::Request;
     use http_body_util::BodyExt;
+    use sqlx::{Connection, SqliteConnection};
     use tower::ServiceExt;
 
     fn test_state(pool: SqlitePool) -> AppState {
@@ -1228,6 +1251,36 @@ mod tests {
             .await
             .unwrap()
     }
+
+    #[tokio::test]
+    async fn existing_ledger_starts_while_a_writer_holds_the_database_lock() {
+        let path = std::env::temp_dir().join(format!("ledger-rollout-{}.db", Uuid::new_v4()));
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let initial_pool = create_pool(&url).await.unwrap();
+        initial_pool.close().await;
+
+        let mut writer = SqliteConnection::connect(&url).await.unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE settings SET value = value WHERE key = 'digest_hour'")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+
+        let reopened =
+            tokio::time::timeout(std::time::Duration::from_millis(750), create_pool(&url))
+                .await
+                .expect("an existing schema must not run write migrations during rollout")
+                .unwrap();
+        reopened.close().await;
+
+        sqlx::query("ROLLBACK").execute(&mut writer).await.unwrap();
+        drop(writer);
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn signatures_are_checked() {
         let body = b"{\"ok\":true}";
