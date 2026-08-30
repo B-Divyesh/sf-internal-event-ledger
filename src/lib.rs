@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{
-    sqlite::{SqlitePoolOptions, SqliteRow},
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow},
     FromRow, Row, SqlitePool,
 };
 use std::{
@@ -23,6 +23,7 @@ use std::{
     io::{ErrorKind, Write},
     net::IpAddr,
     path::{Path as FilePath, PathBuf},
+    str::FromStr,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -198,6 +199,7 @@ pub async fn create_rate_limit_pool(ledger_url: &str) -> anyhow::Result<SqlitePo
 
 async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
     clear_empty_database_journal(url)?;
+    let options = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(8)
         .after_connect(|connection, _| {
@@ -208,7 +210,7 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
                 Ok(())
             })
         })
-        .connect(url)
+        .connect_with(options)
         .await?;
     Ok(pool)
 }
