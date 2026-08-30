@@ -22,10 +22,10 @@ that the controller flagged. Runtime state is SQLite only, persisted under
   limiter uses its own sibling SQLite sidecar (`ledger-rate-limits.db`), so a
   legacy ledger can come online before an older revision releases its file
   lock.
-- Bound the configured `PORT` before opening SQLite and retry a temporary
-  SQLite lock during a rolling replacement. This lets the platform retire the
-  previous single-writer revision before the new process needs the durable
-  ledger file.
+- Bind the configured `PORT` before opening SQLite. While the database is
+  temporarily busy, a startup router returns an honest `503` with
+  `Retry-After` and retries without retaining a failed connection. It switches
+  to the real ledger as soon as the durable file is available.
 - Added `scripts/forbidden-resource.test.mjs` and `npm run
   test:forbidden-resources`. It recursively checks repository source,
   configuration, documentation, and test files for prohibited service,
@@ -47,7 +47,7 @@ All checks below ran from this clean working tree on 2026-08-30.
 
 - `npm ci` — installed 60 packages; audit found 0 vulnerabilities.
 - `npm test` — passed: 4 frontend unit tests, 5 repository/contract scans,
-  19 Rust tests, and all 14 observable product claims.
+  20 Rust tests, and all 14 observable product claims.
 - `npx tsc --noEmit`, `cargo fmt --check`, and `cargo clippy --locked
   --all-targets -- -D warnings` — passed.
 - `VITE_BUILD_SHA=repair-7-local npm run build` — passed. The built initial

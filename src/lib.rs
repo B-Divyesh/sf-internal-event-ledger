@@ -161,26 +161,38 @@ pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
     // initialized: SQLite treats that as a write and it can contend with the
     // serving revision on the durable /data volume. New databases still get
     // the complete schema before the application accepts requests.
-    if !table_exists(&pool, "sources").await? {
-        sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
+    let initialized = async {
+        if !table_exists(&pool, "sources").await? {
+            sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
+                .execute(&pool)
+                .await?;
+            sqlx::raw_sql(include_str!(
+                "../migrations/0002_shared_ephemeral_state.sql"
+            ))
             .execute(&pool)
             .await?;
-        sqlx::raw_sql(include_str!(
-            "../migrations/0002_shared_ephemeral_state.sql"
-        ))
-        .execute(&pool)
-        .await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    if let Err(error) = initialized {
+        pool.close().await;
+        return Err(error);
     }
     Ok(pool)
 }
 
 pub async fn create_rate_limit_pool(ledger_url: &str) -> anyhow::Result<SqlitePool> {
     let pool = open_pool(&rate_limit_database_url(ledger_url)).await?;
-    sqlx::raw_sql(include_str!(
+    let initialized = sqlx::raw_sql(include_str!(
         "../migrations/0002_shared_ephemeral_state.sql"
     ))
     .execute(&pool)
-    .await?;
+    .await;
+    if let Err(error) = initialized {
+        pool.close().await;
+        return Err(error.into());
+    }
     Ok(pool)
 }
 
@@ -1345,6 +1357,42 @@ mod tests {
 
         sqlx::query("ROLLBACK").execute(&mut writer).await.unwrap();
         drop(writer);
+        let rate_limit_url = rate_limit_database_url(&url);
+        let rate_limit_path = rate_limit_url
+            .trim_start_matches("sqlite://")
+            .split('?')
+            .next()
+            .unwrap();
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(rate_limit_path);
+    }
+
+    #[tokio::test]
+    async fn failed_pool_initialization_releases_its_sqlite_connection() {
+        let path = std::env::temp_dir().join(format!("ledger-retry-{}.db", Uuid::new_v4()));
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let initial_pool = create_pool(&url).await.unwrap();
+        initial_pool.close().await;
+
+        let mut writer = SqliteConnection::connect(&url).await.unwrap();
+        sqlx::query("BEGIN EXCLUSIVE")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+        let failed = tokio::time::timeout(std::time::Duration::from_secs(6), create_pool(&url))
+            .await
+            .expect("the busy timeout must return a database-lock error");
+        assert!(failed.is_err());
+
+        sqlx::query("ROLLBACK").execute(&mut writer).await.unwrap();
+        drop(writer);
+        let reopened =
+            tokio::time::timeout(std::time::Duration::from_millis(750), create_pool(&url))
+                .await
+                .expect("a failed pool must not retain its own SQLite lock")
+                .unwrap();
+        reopened.close().await;
+
         let rate_limit_url = rate_limit_database_url(&url);
         let rate_limit_path = rate_limit_url
             .trim_start_matches("sqlite://")

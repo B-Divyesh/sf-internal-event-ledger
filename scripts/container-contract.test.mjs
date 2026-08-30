@@ -30,7 +30,7 @@ test('runtime image carries the supplied build identity and starts with defaults
 
 test('rolling startup binds before it opens the durable SQLite files', () => {
   const listener = serverMain.indexOf('let listener = TcpListener::bind');
-  const pools = serverMain.indexOf('open_runtime_pools(&database_url).await?');
+  const pools = serverMain.indexOf('open_runtime_pools(&database_url).await');
   assert.ok(listener >= 0, 'the service must bind its configured PORT');
   assert.ok(pools >= 0, 'the service must open its SQLite pools');
   assert.ok(listener < pools, 'a replacement must bind before it contends with an older SQLite writer');
