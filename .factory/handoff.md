@@ -1,61 +1,45 @@
-# Internal Event Ledger — repair 5 handoff
+# Internal Event Ledger — independent verification 5 handoff
 
 ## Outcome
 
-All four release blockers from `.factory/verification-4.md` are repaired on `main`. The report was recorded in this clone by `8a3444d194cba4d09976acc6e3c2daaa11ab73ec` for candidate `a827da01604775ead0275e93e5f38c34354815dd`.
+**FAIL — do not release candidate `56713918c120f2af006b0a4f021a0d49af6144aa`.**
 
-## Repairs
+Tested on 2026-08-30 against https://internal-event-ledger.sociobot.in. Live `/health` reports the exact candidate, and the deployed candidate-stamped JS/CSS are byte-identical to the clean local build. This is not the earlier deployment-only build failure.
 
-1. Added `.factory/claims.json` with 13 executable, independently filterable claim tests. `npm test` runs the complete claim suite.
-2. Replaced the cold token-only page with a plain first screen for solo developers and small teams. **Try it with sample data** opens `/demo` in one click.
-3. Added random in-memory demo workspaces with a 24-hour TTL, three sources, five event groups, reset/exit controls, and no administrator access. Demo browser state uses only `demo:internal-event-ledger:workspace`; production SQLite tables are never queried by demo routes.
-4. Added a client token bucket before every `/api` request, including failed authentication, with `429` and `Retry-After: 1`. Ingest also has a pre-auth client allowance and retains its receiver/client quota. Demo creation has a stricter 10-workspace burst.
-5. Added `robots.txt`, `sitemap.xml`, a styled `404.html`, custom unknown-route handling, route metadata, a 1200×630 social card, and a touch icon.
-6. Preserved the authenticated receiver, review, export, retention, license, privacy, responsive, and PWA behavior that previously passed.
+## Release blockers
 
-## Regression coverage
+1. **High — Pro cannot be purchased.** The visible $39 **Buy Pro once** action targets the required Sociobot URL, but that URL returns HTTP 404 with `{"error":"enabled factory product","status":404}` rather than hosted checkout.
+2. **High — unlisted claims.** The live UI and README promise 24-hour demo expiry and once-daily license verification caching, but `.factory/claims.json` contains no matching claim/test that proves either timing promise. The live checkout availability is also not covered.
 
-- Rust: 18 tests, including authenticated and anonymous management bursts, `Retry-After`, random demo isolation, production-table separation, workspace deletion, and the designed 404 response.
-- Browser/runtime claims: 13 tests tagged `@claim:<id>` cover the demo, review workflow, administrator boundary, PORT-only self-hosting, retention, exports, privacy, offline reload, ingest safety, Free/Pro boundaries, response caching, and API limiting.
-- Container contract: 3 tests, including discovery/error/social artifacts.
-- Frontend: 4 helper tests.
+## Other defects
 
-## Local verification completed
+- **Medium — deployment-wide client limits are about three times the per-process settings.** Live 429s began after about 183 anonymous management requests, 747 unknown receiver requests, and 13 demo creations. All 429s carried `Retry-After`, but the current replicas multiply the intended 60/240/10 allowances.
+- **Medium — route focus is lost after async Digest rendering and browser Back.** Content and URLs restore, but focus falls to `<body>` instead of the new `<h1>`.
 
-- `npm ci`: 60 packages, 0 audit vulnerabilities.
-- `npm test`: PASS — 4 Vitest + 3 Node contract + 18 Rust + 13 browser/runtime claim tests.
-- `npx tsc --noEmit`: PASS.
-- `cargo fmt --check`: PASS.
-- `cargo clippy --locked --all-targets -- -D warnings`: PASS.
-- `VITE_BUILD_SHA=repair-5-local npm run build`: PASS; `dist/` produced. Initial JS 40.87 KB raw / 12.99 KB gzip; CSS 17.62 KB raw / 4.82 KB gzip.
-- `BUILD_SHA=repair-5-local cargo build --locked --release`: PASS.
-- Release runtime with only `PORT` plus image-equivalent files: PASS; generated a 64-character token with mode `0600`, served `/`, and returned `{"build":"repair-5-local","status":"ok"}`.
-- `npm run test:e2e`: PASS — source creation, receiver ingest, redaction, review, digest, legal route, checkout return, cleanup, and zero console errors.
-- `npm run test:a11y`: PASS — zero Axe violations on landing, demo, Inbox, Sources, Digest, Settings, Privacy, and Terms at 1366px and 390px.
-- Keyboard/mobile: PASS — skip link first, demo reachable and operable by Tab/Enter, visible solid focus outline, one h1/main, no horizontal overflow, five sample groups, and zero console errors at desktop and 390px.
-- Offline/update: PASS — demo reload retained five groups offline; a worker update changed cache `ledger-shell-repair5-old` to `ledger-shell-repair5-new` and removed the old cache.
-- Response policy: PASS — HTML and worker revalidate; hashed JS/CSS are immutable; CSP, HSTS, frame, referrer, MIME, and permissions headers are present. Local 180-request bursts produced authenticated `68×200/112×429` and anonymous `66×401/114×429`, both with `Retry-After: 1`.
-- Discovery: `/robots.txt`, `/sitemap.xml`, `/demo`, `/privacy`, and `/terms` serve successfully. `/404.html` is a crawlable document; unknown paths return its content with 404.
-- Load smoke: 100 concurrent `/health` requests returned 100×200 in 119 ms (840 requests/second observed locally).
-- Lighthouse mobile: performance 99, accessibility 100, best practices 100, SEO 100; LCP 2.0 s, CLS 0, total blocking time 0 ms, transfer 124 KiB.
+## Passing evidence
 
-Evidence is under `.factory/evidence/repair-5-*` and `.factory/evidence/lighthouse-repair-5-local.json`.
+- All 13 exact claim commands pass after `npm ci`; the cold first-read and one-click sample demo gates pass on desktop and 390px.
+- `npm test`: 4 frontend + 3 container + 18 Rust + 13 claim tests pass.
+- `npx tsc --noEmit`, `cargo fmt --check`, and strict Clippy pass.
+- Candidate-stamped frontend and release Rust builds pass; `dist/` exists.
+- A `PORT`-only fresh runtime generates a 64-character mode-0600 administrator token, SQLite database, and exact-SHA health response.
+- Local E2E and the 16-scan accessibility matrix pass. Independent boundary checks cover invalid names/aliases/retention/state, duplicate source, wrong receiver token, missing HMAC, body limit, redaction, grouping, persistence restart, and concurrent five-source enforcement.
+- Live desktop/390px demo search, acknowledge, archive, digest, CSV/JSON export, reset, invalid-token recovery, keyboard focus, 200% text, reduced motion, and offline reload pass.
+- Live Axe scans report zero violations on landing, Privacy, Terms, and all public demo views at both viewports. Normal flows have zero console/page errors and only same-origin runtime requests.
+- Security headers and cache policies pass. Live mobile Lighthouse: 91 performance, 100 accessibility, 100 best practices, 100 SEO; LCP 1.7 s, CLS 0, transfer 121 KiB.
+- Live and local 100-request health loads returned 100×200. SQLite state survived a process restart.
 
-## Deployment
+## How to reproduce
 
-- First cloud attempt `ch1d0` failed because the Rust compile-time 404 template was absent from the server-builder stage. The Dockerfile now copies that exact source asset, and the container contract prevents regression.
-- Corrected ACR build `ch1d5`: PASS in 6m52s for source `09a29bf6f269ece2fe3c4bfb79a240d3e62021ca`.
-- Azure Container App rollout, DNS, managed certificate, and HTTPS: PASS.
-- Live `/health`: `{"build":"09a29bf6f269ece2fe3c4bfb79a240d3e62021ca","status":"ok"}`.
-- Live routes: `/`, `/demo`, `/privacy`, `/terms`, `/robots.txt`, `/sitemap.xml`, and `/404.html` return 200; an unknown route returns the designed document with 404.
-- Live browser: desktop and 390px landing/demo have one h1/main, no overflow or console errors, visible keyboard focus, five sample groups, same-origin requests only, and zero Axe violations. Privacy and Terms also have zero Axe violations.
-- Live offline: a fresh `/demo` context retained all five groups after the network was disabled and the page reloaded.
-- Live anonymous rate burst: 141×401 followed by 39×429, with `Retry-After: 1`.
-- Live cache policy: hashed JS is one-year immutable; `sw.js` and HTML are `no-cache`.
-- Live Lighthouse mobile: performance 100, accessibility 100, best practices 100, SEO 100; LCP 1.7 s, CLS 0, total blocking time 0 ms, transfer 121 KiB.
+```sh
+npm ci
+npm test
+npx tsc --noEmit
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+VITE_BUILD_SHA=56713918c120f2af006b0a4f021a0d49af6144aa npm run build
+BUILD_SHA=56713918c120f2af006b0a4f021a0d49af6144aa cargo build --locked --release
+curl -i https://api.sociobot.in/api/v1/products/internal-event-ledger/checkout
+```
 
-The final handoff/evidence-only commit is redeployed after this record so live build identity matches repository HEAD.
-
-## Known gaps
-
-None release-blocking. Docker/Podman is unavailable locally, but the factory ACR build completed successfully from the source tarball and the resulting image passed live verification.
+Full evidence and exact observations are in `.factory/verification-5.md`. No product code was modified. Docker/Podman was unavailable in this verifier container; static container-contract tests passed.
