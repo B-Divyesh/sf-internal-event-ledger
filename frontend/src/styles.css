@@ -56,7 +56,7 @@ a { color: var(--signal-dark); text-underline-offset: 3px; }
 .source-count { margin-left: auto; color: #baa986; font-size: 12px; font-variant-numeric: tabular-nums; }
 .sidebar-foot { margin-top: auto; padding-top: 24px; font-size: 12px; color: #b9ad93; }
 .sidebar-foot a, .form-help a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }
-.sidebar-foot a { color: #e2d3b4; }
+.sidebar-foot a { min-width: 44px; justify-content: center; color: #e2d3b4; }
 .workspace { min-width: 0; }
 .topbar { min-height: 72px; padding: 12px clamp(16px,3vw,40px); border-bottom: 1px solid rgba(22,43,53,.25); background: rgba(243,233,210,.92); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .connection { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
@@ -138,6 +138,12 @@ input::placeholder, textarea::placeholder { color: #677174; opacity: 1; }
 .pro-banner { background: var(--night); color: var(--white); border-left: 8px solid var(--brass); }
 .pro-banner h2, .pro-banner h3 { color: var(--white); }
 .pro-banner p { color: #d8cfbc; }
+.pro-banner label, .pro-banner .field-label { color: var(--white); }
+.pro-banner .button:not(.primary) { border-color: #e2d3b4; color: var(--white); }
+.pro-banner .button:not(.primary):hover { background: rgba(255,253,247,.12); }
+.pro-banner .form-help a { color: #f0b74b; }
+.pro-banner .badge.acknowledged { color: #9fd7bd; }
+.license-form { margin-top: 20px; }
 .price { font: 800 34px/1 "Arial Narrow",sans-serif; color: #f0b74b; }
 .legal { max-width: 760px; }
 .legal h2 { margin-top: 36px; font-size: 1.4rem; }

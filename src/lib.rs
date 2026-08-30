@@ -272,7 +272,14 @@ async fn require_admin(
 struct ApiError(StatusCode, String);
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"error": self.1}))).into_response()
+        let status = self.0;
+        let mut response = (status, Json(json!({"error": self.1}))).into_response();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        }
+        response
     }
 }
 impl From<sqlx::Error> for ApiError {
@@ -807,11 +814,7 @@ async fn update_settings(
     State(s): State<AppState>,
     Json(input): Json<SettingsUpdate>,
 ) -> Result<Json<Settings>, ApiError> {
-    let parts: Vec<_> = input.digest_hour.split(':').collect();
-    if parts.len() != 2
-        || parts[0].parse::<u8>().map_or(true, |v| v > 23)
-        || parts[1].parse::<u8>().map_or(true, |v| v > 59)
-    {
+    if !valid_digest_hour(&input.digest_hour) {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
             "Digest time must be HH:MM.".into(),
@@ -824,6 +827,20 @@ async fn update_settings(
     Ok(Json(Settings {
         digest_hour: input.digest_hour,
     }))
+}
+
+fn valid_digest_hour(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 5
+        || bytes[2] != b':'
+        || !bytes[0..2].iter().all(u8::is_ascii_digit)
+        || !bytes[3..5].iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+    let hour = (bytes[0] - b'0') * 10 + bytes[1] - b'0';
+    let minute = (bytes[3] - b'0') * 10 + bytes[4] - b'0';
+    hour <= 23 && minute <= 59
 }
 
 async fn run_retention(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -1176,6 +1193,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn settings_require_exact_hh_mm_and_do_not_persist_invalid_values() {
+        let (router, path) = new_test_router().await;
+        for invalid in ["7:00", "07:0", "7:0", "07:000", "24:00", "23:60", "ab:cd"] {
+            let response = router
+                .clone()
+                .oneshot(
+                    admin(
+                        Request::builder()
+                            .method("PUT")
+                            .uri("/api/settings")
+                            .header("content-type", "application/json"),
+                    )
+                    .body(Body::from(format!(r#"{{"digest_hour":"{invalid}"}}"#)))
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "accepted {invalid}"
+            );
+        }
+
+        let unchanged = router
+            .clone()
+            .oneshot(
+                admin(Request::builder().uri("/api/settings"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let unchanged: Value =
+            serde_json::from_slice(&unchanged.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(unchanged["digest_hour"], "09:00");
+
+        let accepted = router
+            .clone()
+            .oneshot(
+                admin(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/api/settings")
+                        .header("content-type", "application/json"),
+                )
+                .body(Body::from(r#"{"digest_hour":"07:00"}"#))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let accepted: Value =
+            serde_json::from_slice(&accepted.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(accepted["digest_hour"], "07:00");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn administrator_authentication_protects_every_management_route() {
         let (router, path) = new_test_router().await;
         for request in [
@@ -1368,6 +1446,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn ingest_rate_limit_returns_retry_after() {
+        let (router, path) = new_test_router().await;
+        let created = create_test_source(&router, "rate-limited-receiver", 30).await;
+        let payload: Value =
+            serde_json::from_slice(&created.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let token = payload["token"].as_str().unwrap();
+        let mut limited = None;
+        for index in 0..140 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/ingest/rate-limited-receiver")
+                        .header("content-type", "application/json")
+                        .header("x-ledger-token", token)
+                        .header("x-event-fingerprint", format!("rate-{index}"))
+                        .body(Body::from(r#"{"summary":"rate policy"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(response);
+                break;
+            }
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
+        let limited = limited.expect("authenticated burst must reach the receiver rate limit");
+        assert_eq!(limited.headers()[header::RETRY_AFTER], "1");
         let _ = std::fs::remove_file(path);
     }
 

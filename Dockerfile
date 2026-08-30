@@ -7,7 +7,7 @@ COPY package.json package-lock.json tsconfig.json vite.config.ts ./
 COPY frontend ./frontend
 RUN npm ci && VITE_BUILD_SHA="${BUILD_SHA:-dev}" npm run build
 
-FROM rust:1.88-alpine AS server-builder
+FROM rust:1-alpine AS server-builder
 ARG BUILD_SHA
 RUN apk add --no-cache musl-dev sqlite-dev pkgconfig
 WORKDIR /build
