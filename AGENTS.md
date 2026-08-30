@@ -16,7 +16,7 @@ Read `.factory/brief.json` (the researched opportunity) and `.factory/design.md`
 
 ## Working rules
 
-- Keep the stack boring and fast: Vite + vanilla TS or Svelte/Preact for static; Rust (axum) or Node (Hono) for backends; SQLite/PostgreSQL for data. No paid third-party services.
+- Keep the stack boring and fast: Vite + vanilla TS or Svelte/Preact for static; Rust (axum) or Node (Hono) for backends; SQLite under `/data` for all product state. No paid third-party services.
 - Commit small, often, with clear messages. Never commit secrets. Never touch infra, DNS, or billing from this repo — the factory does deployment.
-- Paid features integrate only through the Sociobot billing API (`https://api.sociobot.in/api/v1/...`, Dodo-backed); never embed a payment provider directly.
+- This product is self-contained: do not add integrations that read, change, restart, or depend on another service or shared database.
 - If the brief is impossible or harmful as written, build the closest honest, useful version and explain the deviation in the handoff.

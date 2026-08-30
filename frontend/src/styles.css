@@ -176,16 +176,6 @@ input::placeholder, textarea::placeholder { color: #677174; opacity: 1; }
 .digest-list { margin: 0; padding: 0; list-style: none; }
 .digest-list li { padding: 13px 0; border-bottom: 1px solid rgba(22,43,53,.25); }
 .digest-list small { color: var(--ink-muted); }
-.pro-banner { background: var(--night); color: var(--white); border-left: 8px solid var(--brass); }
-.pro-banner h2, .pro-banner h3 { color: var(--white); }
-.pro-banner p { color: #d8cfbc; }
-.pro-banner label, .pro-banner .field-label { color: var(--white); }
-.pro-banner .button:not(.primary) { border-color: #e2d3b4; color: var(--white); }
-.pro-banner .button:not(.primary):hover { background: rgba(255,253,247,.12); }
-.pro-banner .form-help a { color: #f0b74b; }
-.pro-banner .badge.acknowledged { color: #9fd7bd; }
-.license-form { margin-top: 20px; }
-.price { font: 800 34px/1 "Arial Narrow",sans-serif; color: #f0b74b; }
 .legal { max-width: 760px; }
 .legal h2 { margin-top: 36px; font-size: 1.4rem; }
 .toast-region { position: fixed; right: 20px; bottom: 20px; z-index: 50; display: grid; gap: 8px; pointer-events: none; }

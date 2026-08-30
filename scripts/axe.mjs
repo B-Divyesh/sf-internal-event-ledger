@@ -10,7 +10,7 @@ const views = [
   { name: 'Inbox', button: /^Inbox/, heading: 'Event ledger' },
   { name: 'Sources', button: 'Sources', heading: 'Incoming sources' },
   { name: 'Digest', button: 'Digest', heading: 'Daily digest' },
-  { name: 'Settings', button: 'Settings', heading: 'Settings & license' },
+  { name: 'Settings', button: 'Settings', heading: 'Settings' },
   { name: 'Privacy', link: 'Privacy', heading: 'Privacy' },
   { name: 'Terms', link: 'Terms', heading: 'Terms' },
 ];
@@ -38,9 +38,6 @@ for (const viewport of viewports) {
   await page.getByRole('heading', { name: 'Event ledger' }).waitFor();
 
   for (const view of views) {
-    if (view.name === 'Settings') {
-      await page.evaluate(() => localStorage.setItem('sb_license:internal-event-ledger', 'accessibility-regression-token'));
-    }
     if (view.button) await page.locator(`.main-nav [data-route="${view.name.toLowerCase()}"]`).click();
     else await page.locator(`.sidebar-foot a[data-legal="${view.link.toLowerCase()}"]`).evaluate((node) => node.click());
     await page.getByRole('heading', { name: view.heading }).waitFor();

@@ -11,7 +11,6 @@ import { chromium } from 'playwright';
 const requested = process.argv.includes('--grep') ? process.argv[process.argv.indexOf('--grep') + 1] : '';
 const adminToken = 'claim-test-administrator';
 const workDir = await mkdtemp(join(tmpdir(), 'ledger-claims-'));
-let billingVerificationCount = 0;
 
 async function freePort() {
   return await new Promise((resolve, reject) => {
@@ -24,15 +23,6 @@ async function freePort() {
   });
 }
 
-const billingServer = createServer((request, response) => {
-  const url = new URL(request.url, 'http://fixture.test');
-  if (url.pathname === '/verify') billingVerificationCount += 1;
-  const valid = url.pathname === '/verify' && url.searchParams.get('license') === 'recorded-valid-license';
-  response.writeHead(200, { 'content-type': 'application/json' });
-  response.end(JSON.stringify({ valid, reason: valid ? 'ok' : 'invalid', expires_at: null }));
-});
-await new Promise((resolve) => billingServer.listen(0, '127.0.0.1', resolve));
-const billingPort = billingServer.address().port;
 const port = await freePort();
 const base = `http://127.0.0.1:${port}`;
 const server = spawn(join(process.cwd(), 'target/debug/internal-event-ledger'), [], {
@@ -43,7 +33,6 @@ const server = spawn(join(process.cwd(), 'target/debug/internal-event-ledger'), 
     DATABASE_URL: `sqlite://${join(workDir, 'claims.db')}?mode=rwc`,
     STATIC_DIR: join(process.cwd(), 'dist'),
     ADMIN_TOKEN: adminToken,
-    BILLING_API_BASE: `http://127.0.0.1:${billingPort}`,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -182,7 +171,7 @@ claim('review-workflow', async () => {
 
 claim('administrator-boundary', async () => {
   const anonymousHeaders = { 'x-forwarded-for': '203.0.113.70' };
-  for (const path of ['/api/sources', '/api/events', '/api/digest', '/api/export?format=csv', '/api/settings', '/api/license']) {
+  for (const path of ['/api/sources', '/api/events', '/api/digest', '/api/export?format=csv', '/api/settings']) {
     assert.equal((await fetch(`${base}${path}`, { headers: anonymousHeaders })).status, 401);
   }
   assert.equal((await fetch(`${base}/api/events`, { headers: { authorization: `Bearer ${adminToken}`, 'x-forwarded-for': '203.0.113.71' } })).status, 200);
@@ -320,76 +309,17 @@ claim('ingest-safety', async () => {
   await fetch(`${base}/api/sources/${created.body.id}`, { method: 'DELETE', headers: auth });
 });
 
-claim('plan-limits', async () => {
+claim('self-hosted-controls', async () => {
   const existing = await fetch(`${base}/api/sources`, { headers: auth }).then((response) => response.json());
   for (const source of existing.sources) await fetch(`${base}/api/sources/${source.id}`, { method: 'DELETE', headers: auth });
-  const tooLong = await createSource('too-long-free', { retention_days: 31 });
-  assert.equal(tooLong.response.status, 403);
   const created = [];
-  for (let index = 0; index < 5; index += 1) {
-    const source = await createSource(`free-source-${index}`);
+  for (let index = 0; index < 6; index += 1) {
+    const source = await createSource(`local-source-${index}`, { retention_days: 3650 });
     assert.equal(source.response.status, 201);
     created.push(source.body.id);
   }
-  assert.equal((await createSource('sixth-free-source')).response.status, 403);
-  const license = await fetch(`${base}/api/license`, { method: 'PUT', headers: auth, body: JSON.stringify({ license: 'recorded-valid-license' }) });
-  assert.equal(license.status, 200);
-  const proSource = await createSource('pro-source-six', { retention_days: 3650 });
-  assert.equal(proSource.response.status, 201);
   assert.equal((await fetch(`${base}/api/digest?hours=6`, { headers: auth })).status, 200);
-  for (const id of [...created, proSource.body.id]) await fetch(`${base}/api/sources/${id}`, { method: 'DELETE', headers: auth });
-  await fetch(`${base}/api/license`, { method: 'DELETE', headers: auth });
-});
-
-claim('license-verification-cache', async () => {
-  await fetch(`${base}/api/license`, { method: 'DELETE', headers: auth });
-  const before = billingVerificationCount;
-  const applied = await fetch(`${base}/api/license`, {
-    method: 'PUT',
-    headers: auth,
-    body: JSON.stringify({ license: 'recorded-valid-license' }),
-  });
-  assert.equal(applied.status, 200);
-  assert.equal(billingVerificationCount, before + 1);
-
-  for (let index = 0; index < 5; index += 1) {
-    const cached = await fetch(`${base}/api/license`, { headers: auth });
-    assert.equal(cached.status, 200);
-    assert.equal((await cached.json()).pro, true);
-  }
-  const reapplied = await fetch(`${base}/api/license`, {
-    method: 'PUT',
-    headers: auth,
-    body: JSON.stringify({ license: 'recorded-valid-license' }),
-  });
-  assert.equal(reapplied.status, 200);
-  assert.equal(billingVerificationCount, before + 1, 'cached reads must not call verification again');
-
-  const { DatabaseSync } = await import('node:sqlite');
-  const database = new DatabaseSync(join(workDir, 'claims.db'));
-  const setCheckedAt = database.prepare("UPDATE settings SET value=? WHERE key='license_checked_at'");
-  setCheckedAt.run(String(Math.floor(Date.now() / 1000) - 86_399));
-  assert.equal((await fetch(`${base}/api/license`, { headers: auth })).status, 200);
-  assert.equal(billingVerificationCount, before + 1, 'a verdict younger than 24 hours stays cached');
-
-  setCheckedAt.run(String(Math.floor(Date.now() / 1000) - 86_401));
-  database.close();
-  assert.equal((await fetch(`${base}/api/license`, { headers: auth })).status, 200);
-  assert.equal(billingVerificationCount, before + 2, 'a verdict older than 24 hours is verified again');
-  await fetch(`${base}/api/license`, { method: 'DELETE', headers: auth });
-});
-
-claim('checkout-availability', async () => {
-  const catalog = await fetch('https://api.sociobot.in/api/v1/products');
-  assert.equal(catalog.status, 200);
-  const product = (await catalog.json()).data.find((item) => item.slug === 'internal-event-ledger');
-  assert.deepEqual(
-    product && { name: product.name, price_minor: product.price_minor, currency: product.currency },
-    { name: 'Internal Event Ledger Pro', price_minor: 3900, currency: 'USD' },
-  );
-  const checkout = await fetch(product.checkout_url, { redirect: 'manual' });
-  assert.equal(checkout.status, 303);
-  assert.match(checkout.headers.get('location') || '', /^https:\/\/checkout\.dodopayments\.com\//);
+  for (const id of created) await fetch(`${base}/api/sources/${id}`, { method: 'DELETE', headers: auth });
 });
 
 claim('api-rate-limit', async () => {
@@ -402,7 +332,6 @@ claim('api-rate-limit', async () => {
       DATABASE_URL: `sqlite://${join(workDir, 'claims.db')}?mode=rwc`,
       STATIC_DIR: join(process.cwd(), 'dist'),
       ADMIN_TOKEN: adminToken,
-      BILLING_API_BASE: `http://127.0.0.1:${billingPort}`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -440,6 +369,5 @@ after(async () => {
   await browser.close();
   server.kill('SIGTERM');
   await new Promise((resolve) => server.once('exit', resolve));
-  await new Promise((resolve) => billingServer.close(resolve));
   await rm(workDir, { recursive: true, force: true });
 });

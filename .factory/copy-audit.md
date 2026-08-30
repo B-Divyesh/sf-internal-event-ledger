@@ -10,8 +10,7 @@ Audited 2026-08-30. Counts treat hyphenated terms and prices as one word. No sen
 | Opens an isolated sample ledger with no token. | 8 |
 | Self-host on your own server. | 5 |
 | No analytics or third-party scripts. | 5 |
-| Five sources free. | 3 |
-| Pro costs $39 once. | 4 |
+| All core controls stay local. | 5 |
 | Enter the administrator token from your server. | 7 |
 | It stays in this browser tab. | 6 |
 | Find it in the server file shown during setup. | 9 |
@@ -21,8 +20,7 @@ Audited 2026-08-30. Counts treat hyphenated terms and prices as one word. No sen
 | Search summaries and payloads without chat interruptions. | 7 |
 | Acknowledge, archive, delete by retention, or export. | 7 |
 | This ledger does not page people, retry webhooks, or guarantee delivery. | 11 |
-| The free tier includes 30-day retention and exports. | 8 |
-| Pro costs $39 once for more sources and longer retention. | 10 |
+| Sources, events, settings, and exports stay in this deployment's SQLite database. | 11 |
 | Review low-urgency operational events in a self-hosted ledger. | 8 |
 
 ## Terminology
@@ -34,4 +32,4 @@ Audited 2026-08-30. Counts treat hyphenated terms and prices as one word. No sen
 | Repeated matching events | group |
 | Non-production try-out | demo |
 | Administrative credential | administrator token |
-| Paid capability set | Pro |
+| Persistent product state | SQLite database |

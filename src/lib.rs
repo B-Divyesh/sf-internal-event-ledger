@@ -13,7 +13,10 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{sqlite::SqlitePoolOptions, FromRow, SqlitePool};
+use sqlx::{
+    sqlite::{SqlitePoolOptions, SqliteRow},
+    FromRow, Row, SqlitePool,
+};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
@@ -111,8 +114,6 @@ pub fn load_or_create_admin_token(
 pub struct AppState {
     pub pool: SqlitePool,
     admin_token: Arc<str>,
-    billing_api_base: Arc<str>,
-    http: reqwest::Client,
     ingest_limits: Arc<Mutex<HashMap<String, IngestBucket>>>,
     trusted_proxy_ips: Arc<HashSet<IpAddr>>,
     trust_managed_ingress: bool,
@@ -124,12 +125,10 @@ struct IngestBucket {
 }
 
 impl AppState {
-    pub fn new(pool: SqlitePool, admin_token: String, billing_api_base: String) -> Self {
+    pub fn new(pool: SqlitePool, admin_token: String) -> Self {
         Self {
             pool,
             admin_token: Arc::from(admin_token),
-            billing_api_base: Arc::from(billing_api_base.trim_end_matches('/').to_owned()),
-            http: reqwest::Client::new(),
             ingest_limits: Arc::new(Mutex::new(HashMap::new())),
             trusted_proxy_ips: Arc::new(HashSet::new()),
             trust_managed_ingress: false,
@@ -160,7 +159,12 @@ pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
         })
         .connect(url)
         .await?;
-    sqlx::migrate!().run(&pool).await?;
+    for migration in [
+        include_str!("../migrations/0001_init.sql"),
+        include_str!("../migrations/0002_shared_ephemeral_state.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&pool).await?;
+    }
     Ok(pool)
 }
 
@@ -181,10 +185,6 @@ pub fn app(state: AppState, static_dir: PathBuf) -> Router {
         .route("/export", get(export_events))
         .route("/settings", get(get_settings).put(update_settings))
         .route("/maintenance/retention", post(run_retention))
-        .route(
-            "/license",
-            get(get_license).put(update_license).delete(remove_license),
-        )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
     let demo_api = Router::new()
         .route("/demo", post(create_demo))
@@ -270,7 +270,7 @@ async fn security_headers(req: Request<Body>, next: Next) -> Response {
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
-    h.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.sociobot.in; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://api.sociobot.in"));
+    h.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
     let cache_control = if path.starts_with("/api/")
         || path.starts_with("/ingest/")
         || path == "/health"
@@ -546,7 +546,7 @@ fn demo_payload(workspace_id: &str) -> Value {
     })
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize)]
 struct SourceView {
     id: String,
     name: String,
@@ -557,6 +557,22 @@ struct SourceView {
     created_at: String,
     event_count: i64,
     unread_count: i64,
+}
+
+impl<'r> FromRow<'r, SqliteRow> for SourceView {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            alias: row.try_get("alias")?,
+            redact_headers: row.try_get("redact_headers")?,
+            redact_paths: row.try_get("redact_paths")?,
+            retention_days: row.try_get("retention_days")?,
+            created_at: row.try_get("created_at")?,
+            event_count: row.try_get("event_count")?,
+            unread_count: row.try_get("unread_count")?,
+        })
+    }
 }
 
 async fn list_sources(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -615,27 +631,15 @@ async fn create_source(
             "Retention must be between 1 and 3650 days.".into(),
         ));
     }
-    let pro = has_valid_server_license(&s).await?;
-    if !pro && retention > 30 {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "The free plan supports retention from 1 to 30 days. Add a valid Pro license to use longer retention.".into(),
-        ));
-    }
     let mut raw = [0u8; 24];
     rand::rng().fill_bytes(&mut raw);
     let token = hex::encode(raw);
     let token_hash = sha256_hex(token.as_bytes());
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
-    // The free-tier predicate lives in the INSERT, rather than a preceding
-    // COUNT, so concurrent requests cannot observe the same remaining slot.
-    let query = if pro {
-        "INSERT INTO sources(id,name,alias,token_hash,signing_secret,redact_headers,redact_paths,retention_days,created_at) VALUES(?,?,?,?,?,?,?,?,?)"
-    } else {
-        "INSERT INTO sources(id,name,alias,token_hash,signing_secret,redact_headers,redact_paths,retention_days,created_at) SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM sources) < 5"
-    };
-    let result = match sqlx::query(query)
+    let result = match sqlx::query(
+        "INSERT INTO sources(id,name,alias,token_hash,signing_secret,redact_headers,redact_paths,retention_days,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+    )
         .bind(&id)
         .bind(input.name.trim())
         .bind(&alias)
@@ -657,12 +661,7 @@ async fn create_source(
         }
         Err(error) => return Err(error.into()),
     };
-    if !pro && result.rows_affected() == 0 {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "The free plan supports up to five sources. Add a valid Pro license to create another source.".into(),
-        ));
-    }
+    debug_assert_eq!(result.rows_affected(), 1);
     Ok((
         StatusCode::CREATED,
         Json(
@@ -685,13 +684,24 @@ async fn delete_source(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(FromRow)]
 struct IngestSource {
     id: String,
     token_hash: String,
     signing_secret: Option<String>,
     redact_headers: String,
     redact_paths: String,
+}
+
+impl<'r> FromRow<'r, SqliteRow> for IngestSource {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            token_hash: row.try_get("token_hash")?,
+            signing_secret: row.try_get("signing_secret")?,
+            redact_headers: row.try_get("redact_headers")?,
+            redact_paths: row.try_get("redact_paths")?,
+        })
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -876,7 +886,7 @@ struct EventQuery {
     limit: Option<i64>,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize)]
 struct EventView {
     id: String,
     source_id: String,
@@ -891,6 +901,26 @@ struct EventView {
     occurrence_count: i64,
     received_at: String,
     last_seen_at: String,
+}
+
+impl<'r> FromRow<'r, SqliteRow> for EventView {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            source_id: row.try_get("source_id")?,
+            source_name: row.try_get("source_name")?,
+            source_alias: row.try_get("source_alias")?,
+            fingerprint: row.try_get("fingerprint")?,
+            event_type: row.try_get("event_type")?,
+            summary: row.try_get("summary")?,
+            payload_json: row.try_get("payload_json")?,
+            headers_json: row.try_get("headers_json")?,
+            status: row.try_get("status")?,
+            occurrence_count: row.try_get("occurrence_count")?,
+            received_at: row.try_get("received_at")?,
+            last_seen_at: row.try_get("last_seen_at")?,
+        })
+    }
 }
 
 async fn list_events(
@@ -984,12 +1014,6 @@ async fn digest(
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
             "Digest window must be between 1 and 168 hours.".into(),
-        ));
-    }
-    if hours != 24 && !has_valid_server_license(&s).await? {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Custom digest windows require a valid Pro license. The free daily digest remains available.".into(),
         ));
     }
     let since = (Utc::now() - Duration::hours(hours)).to_rfc3339();
@@ -1113,149 +1137,6 @@ async fn health() -> Json<Value> {
     Json(json!({"status":"ok","build":env!("BUILD_SHA")}))
 }
 
-#[derive(Deserialize)]
-struct LicenseUpdate {
-    license: String,
-}
-
-#[derive(Deserialize)]
-struct LicenseVerdict {
-    valid: bool,
-}
-
-async fn get_license(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let pro = has_valid_server_license(&s).await?;
-    Ok(Json(json!({"pro": pro})))
-}
-
-async fn update_license(
-    State(s): State<AppState>,
-    Json(input): Json<LicenseUpdate>,
-) -> Result<Json<Value>, ApiError> {
-    let token = input.license.trim();
-    if token.is_empty() || token.len() > 4096 {
-        return Err(ApiError(
-            StatusCode::BAD_REQUEST,
-            "Paste a valid license token.".into(),
-        ));
-    }
-    let verdict = match cached_license_verdict(&s, token).await? {
-        Some(verdict) => verdict,
-        None => verify_license(&s, token).await?,
-    };
-    if !verdict {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "That license is not active for Internal Event Ledger.".into(),
-        ));
-    }
-    set_setting(&s.pool, "license_token", token).await?;
-    set_setting(&s.pool, "license_valid", "true").await?;
-    set_setting(
-        &s.pool,
-        "license_checked_at",
-        &Utc::now().timestamp().to_string(),
-    )
-    .await?;
-    Ok(Json(
-        json!({"pro":true,"notice":"License verified by this server."}),
-    ))
-}
-
-async fn remove_license(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
-    sqlx::query(
-        "DELETE FROM settings WHERE key IN ('license_token','license_valid','license_checked_at')",
-    )
-    .execute(&s.pool)
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn has_valid_server_license(s: &AppState) -> Result<bool, ApiError> {
-    let Some(token) = get_setting(&s.pool, "license_token").await? else {
-        return Ok(false);
-    };
-    if let Some(verdict) = cached_license_verdict(s, &token).await? {
-        return Ok(verdict);
-    }
-    let valid = verify_license(s, &token).await.unwrap_or(false);
-    set_setting(
-        &s.pool,
-        "license_valid",
-        if valid { "true" } else { "false" },
-    )
-    .await?;
-    set_setting(
-        &s.pool,
-        "license_checked_at",
-        &Utc::now().timestamp().to_string(),
-    )
-    .await?;
-    Ok(valid)
-}
-
-async fn cached_license_verdict(s: &AppState, token: &str) -> Result<Option<bool>, ApiError> {
-    if get_setting(&s.pool, "license_token").await?.as_deref() != Some(token) {
-        return Ok(None);
-    }
-    let checked_at = get_setting(&s.pool, "license_checked_at")
-        .await?
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(0);
-    let cached_valid = get_setting(&s.pool, "license_valid").await?.as_deref() == Some("true");
-    if (0..86_400).contains(&(Utc::now().timestamp() - checked_at)) {
-        return Ok(Some(cached_valid));
-    }
-    Ok(None)
-}
-
-async fn verify_license(s: &AppState, token: &str) -> Result<bool, ApiError> {
-    let endpoint = format!("{}/verify", s.billing_api_base);
-    let response = s
-        .http
-        .get(endpoint)
-        .query(&[("license", token)])
-        .send()
-        .await
-        .map_err(|error| {
-            tracing::warn!(%error, "license verification request failed");
-            ApiError(
-                StatusCode::BAD_GATEWAY,
-                "Could not verify the license right now.".into(),
-            )
-        })?;
-    if !response.status().is_success() {
-        return Err(ApiError(
-            StatusCode::BAD_GATEWAY,
-            "Could not verify the license right now.".into(),
-        ));
-    }
-    let verdict = response.json::<LicenseVerdict>().await.map_err(|error| {
-        tracing::warn!(%error, "license verification response was invalid");
-        ApiError(
-            StatusCode::BAD_GATEWAY,
-            "Could not verify the license right now.".into(),
-        )
-    })?;
-    Ok(verdict.valid)
-}
-
-async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, ApiError> {
-    Ok(sqlx::query_scalar("SELECT value FROM settings WHERE key=?")
-        .bind(key)
-        .fetch_optional(pool)
-        .await?)
-}
-
-async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<(), ApiError> {
-    sqlx::query("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-        .bind(key)
-        .bind(value)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 fn sha256_hex(data: &[u8]) -> String {
     hex::encode(Sha256::digest(data))
 }
@@ -1315,11 +1196,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_state(pool: SqlitePool) -> AppState {
-        AppState::new(
-            pool,
-            "test-administrator-token".into(),
-            "http://127.0.0.1:9/unreachable".into(),
-        )
+        AppState::new(pool, "test-administrator-token".into())
     }
 
     fn admin(request: axum::http::request::Builder) -> axum::http::request::Builder {
@@ -1581,59 +1458,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_enforces_free_limits_and_honors_a_fresh_verified_license_cache() {
+    async fn server_keeps_source_and_digest_controls_local() {
         let (router, path) = new_test_router().await;
-        for index in 0..5 {
-            let response = create_test_source(&router, &format!("source-{index}"), 30).await;
+        for index in 0..6 {
+            let response = create_test_source(&router, &format!("source-{index}"), 3650).await;
             assert_eq!(response.status(), StatusCode::CREATED);
         }
-        assert_eq!(
-            create_test_source(&router, "source-six", 30).await.status(),
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(
-            create_test_source(&router, "long-retention", 31)
-                .await
-                .status(),
-            StatusCode::FORBIDDEN
-        );
         let digest = router
-            .clone()
-            .oneshot(
-                admin(Request::builder().uri("/api/digest?hours=6"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(digest.status(), StatusCode::FORBIDDEN);
-
-        let state = test_state(
-            create_pool(&format!("sqlite://{}?mode=rwc", path.display()))
-                .await
-                .unwrap(),
-        );
-        set_setting(&state.pool, "license_token", "server-verified-token")
-            .await
-            .unwrap();
-        set_setting(&state.pool, "license_valid", "true")
-            .await
-            .unwrap();
-        set_setting(
-            &state.pool,
-            "license_checked_at",
-            &Utc::now().timestamp().to_string(),
-        )
-        .await
-        .unwrap();
-        let licensed_router = app(state, std::env::temp_dir());
-        assert_eq!(
-            create_test_source(&licensed_router, "source-six", 3650)
-                .await
-                .status(),
-            StatusCode::CREATED
-        );
-        let digest = licensed_router
             .clone()
             .oneshot(
                 admin(Request::builder().uri("/api/digest?hours=6"))
@@ -1647,7 +1478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn simultaneous_free_source_creation_never_exceeds_five_sources() {
+    async fn simultaneous_source_creation_keeps_every_successful_source() {
         let (router, path) = new_test_router().await;
         let mut requests = tokio::task::JoinSet::new();
         for index in 0..20 {
@@ -1659,16 +1490,13 @@ mod tests {
             });
         }
         let mut created = 0;
-        let mut rejected = 0;
         while let Some(result) = requests.join_next().await {
             match result.unwrap() {
                 StatusCode::CREATED => created += 1,
-                StatusCode::FORBIDDEN => rejected += 1,
                 status => panic!("unexpected concurrent creation response: {status}"),
             }
         }
-        assert_eq!(created, 5);
-        assert_eq!(rejected, 15);
+        assert_eq!(created, 20);
         let response = router
             .oneshot(
                 admin(Request::builder().uri("/api/sources"))
@@ -1680,7 +1508,7 @@ mod tests {
         let payload: Value =
             serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
-        assert_eq!(payload["sources"].as_array().unwrap().len(), 5);
+        assert_eq!(payload["sources"].as_array().unwrap().len(), 20);
         let _ = std::fs::remove_file(path);
     }
 

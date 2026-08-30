@@ -7,17 +7,15 @@ type Digest = { hours:number; generated_at:string; total_occurrences:number; unr
 type View = 'inbox'|'sources'|'digest'|'settings'|'privacy'|'terms';
 type DemoWorkspace = { workspace_id:string; expires_in_seconds:number; digest_hour:string; sources:Source[]; events:EventItem[] };
 
-const LICENSE_KEY = 'sb_license:internal-event-ledger';
 const ADMIN_TOKEN_KEY = 'iel:admin-token';
 const DEMO_KEY = 'demo:internal-event-ledger:workspace';
-const BILLING = 'https://api.sociobot.in/api/v1/products/internal-event-ledger';
 const BUILD_SHA = __BUILD_SHA__;
 const startsInDemo = location.pathname === '/demo' || new URLSearchParams(location.search).get('demo') === '1';
 const state = {
   view: routeView(), sources: [] as Source[], events: [] as EventItem[], digest: null as Digest|null,
   selectedSource: '', status: 'active', search: '', loading: true, error: '', online: navigator.onLine,
   openEvent: '', selected: new Set<string>(), credential: null as null|{alias:string;token:string;path:string},
-  pro: false, licenseNotice: '', pendingLicense: Boolean(stored(LICENSE_KEY)), digestHour: '09:00', digestHours: 24, accessRequired: !sessionStored(ADMIN_TOKEN_KEY) && !startsInDemo,
+  digestHour: '09:00', digestHours: 24, accessRequired: !sessionStored(ADMIN_TOKEN_KEY) && !startsInDemo,
   adminToken: sessionStored(ADMIN_TOKEN_KEY) || '',
   demoMode: startsInDemo, demoId: '', demoEvents: [] as EventItem[], demoStartedAt: 0,
 };
@@ -122,26 +120,25 @@ function eventRow(event:EventItem):string {
 }
 
 function sourcesView():string {
-  const capReached=!state.pro && state.sources.length>=5;
   let body=pageHead('Routing office / 02','Incoming sources','Give each producer a private endpoint, signature policy, and redaction map.');
   if(state.credential) body+=`<section class="credential" role="status"><h2>Copy this token now</h2><p>For security, it will not be shown again. Send it as <code>X-Ledger-Token</code> or a Bearer token.</p><span class="field-label">Receiver URL</span><code>${escapeHtml(location.origin+state.credential.path)}</code><span class="field-label">Token</span><code>${escapeHtml(state.credential.token)}</code><button class="button" id="copy-curl">Copy cURL example</button></section>`;
-  body+=`<section class="panel"><div class="panel-head"><div><h2>Registered lines</h2><p>${state.sources.length} of ${state.pro?'unlimited':'5 free'} sources in service.</p></div></div>${state.sources.length?state.sources.map((s)=>`<div class="source-card"><div><h3><span class="route-code">/${escapeHtml(s.alias)}</span>${escapeHtml(s.name)}</h3><p>${s.event_count} groups · ${s.unread_count} unread · ${s.retention_days} day retention</p><p>Body redactions: ${escapeHtml(parseJson<string[]>(s.redact_paths,[]).join(', ')||'none')}</p></div><div class="actions"><button class="button danger" data-delete-source="${s.id}" data-source-name="${escapeHtml(s.name)}">Remove source</button></div></div>`).join(''):`<p>No sources are registered yet.</p>`}</section>`;
+  body+=`<section class="panel"><div class="panel-head"><div><h2>Registered lines</h2><p>${state.sources.length} sources in service.</p></div></div>${state.sources.length?state.sources.map((s)=>`<div class="source-card"><div><h3><span class="route-code">/${escapeHtml(s.alias)}</span>${escapeHtml(s.name)}</h3><p>${s.event_count} groups · ${s.unread_count} unread · ${s.retention_days} day retention</p><p>Body redactions: ${escapeHtml(parseJson<string[]>(s.redact_paths,[]).join(', ')||'none')}</p></div><div class="actions"><button class="button danger" data-delete-source="${s.id}" data-source-name="${escapeHtml(s.name)}">Remove source</button></div></div>`).join(''):`<p>No sources are registered yet.</p>`}</section>`;
   if(state.demoMode) return body+`<section class="panel demo-note"><h2>Sample sources are read-only</h2><p>Start for real to create private receiver endpoints on this deployment.</p><button class="button primary" data-start-real>Start for real</button></section>`;
-  body+=`<section class="panel"><div class="panel-head"><div><h2>Add a source</h2><p>Tokens are generated locally by this server. A signing secret makes HMAC-SHA256 mandatory.</p></div>${capReached?'<span class="badge">Free limit reached</span>':''}</div>
-    ${capReached?`<p>You have five active routes. The one-time Pro unlock adds unlimited sources; existing sources and all exports remain available.</p><button class="button primary" data-route="settings">View Pro unlock</button>`:`<form id="source-form" class="form-grid">
+  body+=`<section class="panel"><div class="panel-head"><div><h2>Add a source</h2><p>Tokens are generated locally by this server. A signing secret makes HMAC-SHA256 mandatory.</p></div></div>
+    <form id="source-form" class="form-grid">
       <div class="field"><label for="source-name">Source name</label><input id="source-name" name="name" required maxlength="80" placeholder="Billing production"></div>
       <div class="field"><label for="source-alias">Endpoint alias</label><input id="source-alias" name="alias" required minlength="2" maxlength="48" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="billing-prod" aria-describedby="alias-help"><p class="form-help" id="alias-help">Lowercase letters, numbers, and hyphens.</p></div>
       <div class="field wide"><label for="signing-secret">HMAC signing secret <span class="form-help">(optional)</span></label><input id="signing-secret" name="signing_secret" type="password" autocomplete="new-password" placeholder="Shared with the sender"><p class="form-help">When set, send a hex digest as <code>X-Ledger-Signature: sha256=…</code>.</p></div>
       <div class="field"><label for="redact-headers">Redact headers</label><input id="redact-headers" name="redact_headers" placeholder="x-api-key, x-customer-email"><p class="form-help">Comma-separated, case-insensitive.</p></div>
       <div class="field"><label for="redact-paths">Redact body paths</label><input id="redact-paths" name="redact_paths" placeholder="user.email, payment.card"><p class="form-help">Dot-separated JSON object paths.</p></div>
-      <div class="field"><label for="retention-days">Retention days</label><input id="retention-days" name="retention_days" type="number" min="1" max="${state.pro?'3650':'30'}" value="30"></div>
+      <div class="field"><label for="retention-days">Retention days</label><input id="retention-days" name="retention_days" type="number" min="1" max="3650" value="30"></div>
       <div class="wide actions"><button class="button primary" type="submit">Create endpoint</button></div>
-    </form>`}</section>`;
+    </form></section>`;
   return body;
 }
 
 function digestView():string {
-  const windowControl=state.pro?`<label class="field-label" for="digest-window">Window <select id="digest-window"><option value="6" ${state.digestHours===6?'selected':''}>6 hours</option><option value="12" ${state.digestHours===12?'selected':''}>12 hours</option><option value="24" ${state.digestHours===24?'selected':''}>24 hours</option><option value="72" ${state.digestHours===72?'selected':''}>3 days</option><option value="168" ${state.digestHours===168?'selected':''}>7 days</option></select></label>`:'';
+  const windowControl=`<label class="field-label" for="digest-window">Window <select id="digest-window"><option value="6" ${state.digestHours===6?'selected':''}>6 hours</option><option value="12" ${state.digestHours===12?'selected':''}>12 hours</option><option value="24" ${state.digestHours===24?'selected':''}>24 hours</option><option value="72" ${state.digestHours===72?'selected':''}>3 days</option><option value="168" ${state.digestHours===168?'selected':''}>7 days</option></select></label>`;
   const body=pageHead('Morning board / 03','Daily digest',`A compact roll-up of active signals received in the last ${state.digestHours} hours.`,`<div class="actions">${windowControl}<button class="button" id="copy-digest">Copy digest</button><button class="button" id="load-digest">Refresh</button></div>`);
   if(!state.digest) return body+`<div class="panel"><div class="skeleton"></div><div class="skeleton"></div></div>`;
   const d=state.digest;
@@ -149,18 +146,16 @@ function digestView():string {
 }
 
 function settingsView():string {
-  if(state.demoMode) return `${pageHead('Station office / 04','Demo settings','This sample cannot change server settings or licenses.')}<section class="panel"><h2>Use your own deployment</h2><p>Start for real to set review times, retention, and a Pro license.</p><button class="button primary" data-start-real>Start for real</button></section>`;
-  const buy=`${BILLING}/checkout`;
-  let body=pageHead('Station office / 04','Settings & license','Set the review rhythm, run retention, or unlock capacity without changing the core ledger.');
+  if(state.demoMode) return `${pageHead('Station office / 04','Demo settings','This sample cannot change server settings.')}<section class="panel"><h2>Use your own deployment</h2><p>Start for real to set review times and retention.</p><button class="button primary" data-start-real>Start for real</button></section>`;
+  let body=pageHead('Station office / 04','Settings','Set the review rhythm and run retention without changing the core ledger.');
   body+=`<section class="panel"><div class="panel-head"><div><h2>Digest rhythm</h2><p>The ledger exposes this saved time for a host scheduler or your own morning routine; it does not send email.</p></div></div><form id="settings-form" class="form-grid"><div class="field"><label for="digest-hour">Daily review time</label><input id="digest-hour" type="time" name="digest_hour" value="${escapeHtml(state.digestHour)}"></div><div class="actions"><button class="button primary" type="submit">Save review time</button><button class="button" type="button" id="run-retention">Run retention now</button></div></form></section>`;
-  body+=`<section class="panel pro-banner"><div class="panel-head"><div><p class="eyebrow">Permanent route permit</p><h2>${state.pro?'Pro is active':'Unlock Pro'}</h2><p>${state.pro?'This server has a verified Internal Event Ledger license.':'Keep five sources free forever. Pro adds unlimited sources, up to 10-year retention, and custom digest windows.'}</p></div><div class="price">$39 <small>once</small></div></div>${state.licenseNotice?`<p role="status">${escapeHtml(state.licenseNotice)}</p>`:''}<div class="actions">${state.pro?'<span class="badge acknowledged">License active</span>':`<a class="button primary" href="${buy}">Buy Pro once</a>`}</div><form id="license-form" class="form-grid license-form"><div class="field wide"><label for="license-token">Have a license? Paste it here</label><input id="license-token" name="license" autocomplete="off" spellcheck="false" placeholder="License token"></div><div class="wide actions"><button class="button" type="submit">Verify and apply to this server</button>${localStorage.getItem(LICENSE_KEY)?'<button class="button danger" type="button" id="remove-license">Remove license</button>':''}</div></form><p class="form-help">The server verifies the license and caches its verdict for up to one day. One-time purchase. Sociobot/Dodo is the merchant of record and handles refunds; refunded licenses are revoked automatically. <a href="/privacy" data-legal="privacy">Privacy</a> · <a href="/terms" data-legal="terms">Terms</a></p></section>`;
   body+=`<section class="panel"><h2>Privacy controls</h2><p>Events stay in your SQLite database. Receiver credentials are stripped before headers are stored. Export remains available on every tier.</p><div class="actions"><button class="button" id="export-json">Export all JSON</button><a class="button" href="/privacy" data-legal="privacy">Read privacy policy</a></div></section>`;
   return body;
 }
 
 function legalView(kind:'privacy'|'terms'):string {
-  const privacy=`${pageHead('Policy / P','Privacy','How a self-hosted ledger handles operational event data.')}<article class="legal"><p><strong>Effective 28 August 2026.</strong> Internal Event Ledger is self-hosted. Event bodies, selected headers, source configuration, acknowledgment state, and retention preferences are stored only in the SQLite database you operate.</p><h2>What is stored</h2><p>The receiver stores event JSON after configured body-path redaction, selected non-credential headers after header redaction, timestamps, fingerprints, and review state. Authentication tokens, authorization headers, cookies, and webhook signatures are never written into event records.</p><h2>Billing and licenses</h2><p>If you buy Pro, Sociobot and its merchant-of-record provider Dodo process checkout. The returned license token is retained in browser local storage for restoration and, when you apply it, in the server database so the server can verify its status with Sociobot no more than once daily. It is never included in event records or exports.</p><h2>Retention and control</h2><p>You choose retention by source, may run deletion at any time, may remove a source and all its events, and can export JSON or CSV. This product contains no analytics, advertising, tracking pixel, or third-party runtime script.</p><h2>Contact</h2><p>For product privacy questions, contact <a href="mailto:privacy@sociobot.in">privacy@sociobot.in</a>. For server access and deletion, contact the operator of your deployment.</p></article>`;
-  const terms=`${pageHead('Policy / T','Terms','Clear conditions for using and purchasing Internal Event Ledger.')}<article class="legal"><p><strong>Effective 27 August 2026.</strong> You may use and self-host this software under its MIT License. You are responsible for securing the deployment, configuring sender signatures and redaction, and ensuring you have permission to store submitted event data.</p><h2>Scope</h2><p>The product is a review ledger for non-urgent operational events. It is not an incident pager, guaranteed-delivery queue, backup system, or emergency service. Do not rely on it for life-safety or time-critical alerts.</p><h2>Pro purchase</h2><p>Pro is a $39 one-time license that unlocks unlimited sources, longer retention controls, and custom digest windows for this product. Sociobot/Dodo is the merchant of record. Checkout, receipts, taxes, and eligible refunds are handled there. A refund revokes the associated license.</p><h2>Availability and warranty</h2><p>The software is provided “as is,” without warranty. You control your self-hosted database and backups. Features may improve while purchased access to the stated Pro capabilities is honored for valid licenses.</p><h2>Fair use</h2><p>Do not use the receiver to collect data unlawfully, interfere with networks, or bypass another system’s access controls.</p></article>`;
+  const privacy=`${pageHead('Policy / P','Privacy','How a self-hosted ledger handles operational event data.')}<article class="legal"><p><strong>Effective 30 August 2026.</strong> Internal Event Ledger is self-hosted. Event bodies, selected headers, source configuration, acknowledgment state, and retention preferences are stored only in the SQLite database you operate.</p><h2>What is stored</h2><p>The receiver stores event JSON after configured body-path redaction, selected non-credential headers after header redaction, timestamps, fingerprints, and review state. Authentication tokens, authorization headers, cookies, and webhook signatures are never written into event records.</p><h2>Local operation</h2><p>The application does not contact a billing, analytics, font, CDN, or other third-party service. It reads and writes only its own SQLite database and browser storage used for the sample ledger.</p><h2>Retention and control</h2><p>You choose retention by source, may run deletion at any time, may remove a source and all its events, and can export JSON or CSV. For server access, deletion, or privacy questions, contact the operator of your deployment.</p></article>`;
+  const terms=`${pageHead('Policy / T','Terms','Clear conditions for using Internal Event Ledger.')}<article class="legal"><p><strong>Effective 30 August 2026.</strong> You may use and self-host this software under its MIT License. You are responsible for securing the deployment, configuring sender signatures and redaction, and ensuring you have permission to store submitted event data.</p><h2>Scope</h2><p>The product is a review ledger for non-urgent operational events. It is not an incident pager, guaranteed-delivery queue, backup system, or emergency service. Do not rely on it for life-safety or time-critical alerts.</p><h2>Local data</h2><p>You control the SQLite database and backups for your deployment. The software does not use external billing or identity services.</p><h2>Availability and warranty</h2><p>The software is provided “as is,” without warranty. Features may improve while the core receiver, review, retention, and export workflows remain available in your deployment.</p><h2>Fair use</h2><p>Do not use the receiver to collect data unlawfully, interfere with networks, or bypass another system’s access controls.</p></article>`;
   return kind==='privacy'?privacy:terms;
 }
 
@@ -182,12 +177,12 @@ function accessView():string {
     <header class="landing-header"><a class="brand" href="/" aria-label="Internal Event Ledger home"><span class="brand-mark" aria-hidden="true"><span>IEL</span></span><span class="brand-copy">Internal event<small>Central ledger</small></span></a><nav aria-label="Public pages"><a href="/demo">Demo</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav></header>
     <main id="main" tabindex="-1">
       <section class="landing-hero">
-        <div class="landing-copy"><p class="eyebrow">Self-hosted webhook review</p><h1>Review operational events without Slack noise</h1><p class="landing-lede">For solo developers and small teams that need searchable webhook history without another urgent inbox.</p><div class="landing-cta"><button class="button primary" id="try-demo">Try it with sample data</button><span>Opens an isolated sample ledger with no token.</span></div><ul class="fact-list"><li>Self-host on your own server.</li><li>No analytics or third-party scripts.</li><li>Five sources free. Pro costs $39 once.</li></ul></div>
-        <section class="access-card" aria-labelledby="access-title"><p class="eyebrow">Your deployment</p><h2 id="access-title">Open your ledger</h2><p>Enter the administrator token from your server. It stays in this browser tab.</p>${state.pendingLicense?`<div class="notice" role="status">${escapeHtml(state.licenseNotice)}</div>`:''}${state.error?`<div class="notice" role="alert">${escapeHtml(state.error)}</div>`:''}<form id="admin-access-form" class="form-grid"><div class="field wide"><label for="admin-token">Administrator token</label><input id="admin-token" name="token" type="password" required autocomplete="current-password" aria-describedby="token-help"><p class="form-help" id="token-help">Find it in the server file shown during setup.</p></div><div class="wide actions"><button class="button" type="submit">Open my ledger</button></div></form></section>
+        <div class="landing-copy"><p class="eyebrow">Self-hosted webhook review</p><h1>Review operational events without Slack noise</h1><p class="landing-lede">For solo developers and small teams that need searchable webhook history without another urgent inbox.</p><div class="landing-cta"><button class="button primary" id="try-demo">Try it with sample data</button><span>Opens an isolated sample ledger with no token.</span></div><ul class="fact-list"><li>Self-host on your own server.</li><li>No analytics or third-party scripts.</li><li>All core controls stay local.</li></ul></div>
+        <section class="access-card" aria-labelledby="access-title"><p class="eyebrow">Your deployment</p><h2 id="access-title">Open your ledger</h2><p>Enter the administrator token from your server. It stays in this browser tab.</p>${state.error?`<div class="notice" role="alert">${escapeHtml(state.error)}</div>`:''}<form id="admin-access-form" class="form-grid"><div class="field wide"><label for="admin-token">Administrator token</label><input id="admin-token" name="token" type="password" required autocomplete="current-password" aria-describedby="token-help"><p class="form-help" id="token-help">Find it in the server file shown during setup.</p></div><div class="wide actions"><button class="button" type="submit">Open my ledger</button></div></form></section>
       </section>
       <section class="landing-preview" aria-labelledby="preview-title"><div><p class="eyebrow">A searchable record</p><h2 id="preview-title">See repeats before they become noise</h2><p>Each receiver groups matching events by fingerprint. Reviewers can search, acknowledge, archive, and export the record.</p><ol class="preview-events"><li><strong>Refund review requested</strong><span>Checkout API · 3 arrivals</span></li><li><strong>Catalogue import needs two files</strong><span>Customer imports · 2 arrivals</span></li><li><strong>Production deploy completed</strong><span>Deploy pipeline · acknowledged</span></li></ol></div><img src="/assets/dispatch-hall.webp" width="1200" height="800" alt="Five signal routes converge into an open operations ledger at a midnight dispatch desk" decoding="async" fetchpriority="high"></section>
       <section class="landing-section" aria-labelledby="how-title"><p class="eyebrow">How it works</p><h2 id="how-title">Route, review, retain</h2><ol class="step-list"><li><strong>Connect a source.</strong><span>Create a private JSON receiver and optional signature rule.</span></li><li><strong>Review grouped events.</strong><span>Search summaries and payloads without chat interruptions.</span></li><li><strong>Keep the useful record.</strong><span>Acknowledge, archive, delete by retention, or export.</span></li></ol></section>
-      <section class="landing-section boundary" aria-labelledby="boundary-title"><div><p class="eyebrow">Clear boundaries</p><h2 id="boundary-title">Use an incident tool for urgent alerts</h2><p>This ledger does not page people, retry webhooks, or guarantee delivery.</p></div><div><p class="eyebrow">Pricing</p><h2>Start with five sources</h2><p>The free tier includes 30-day retention and exports. Pro costs $39 once for more sources and longer retention.</p><a class="button" href="${BILLING}/checkout">Buy Pro once</a></div></section>
+      <section class="landing-section boundary" aria-labelledby="boundary-title"><div><p class="eyebrow">Clear boundaries</p><h2 id="boundary-title">Use an incident tool for urgent alerts</h2><p>This ledger does not page people, retry webhooks, or guarantee delivery.</p></div><div><p class="eyebrow">Local storage</p><h2>Keep the record on your server</h2><p>Sources, events, settings, and exports stay in this deployment's SQLite database.</p></div></section>
     </main>
     <footer class="landing-footer"><p>Review low-urgency operational events in a self-hosted ledger.</p><nav aria-label="Footer"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><span>Built by Param Factory</span></nav><small>Build ${escapeHtml(BUILD_SHA.slice(0,12))} · Poster artwork generated for Internal Event Ledger.</small></footer>
   </div>`;
@@ -195,7 +190,7 @@ function accessView():string {
 
 function bindAccess():void {
   document.querySelector('#try-demo')?.addEventListener('click',()=>void enterDemo());
-  document.querySelector<HTMLFormElement>('#admin-access-form')?.addEventListener('submit',(event)=>{event.preventDefault();const token=String(new FormData(event.currentTarget as HTMLFormElement).get('token')||'').trim();if(!token){state.error='Enter the administrator token.';render();return;}state.adminToken=token;state.accessRequired=false;state.error='';try{sessionStorage.setItem(ADMIN_TOKEN_KEY,token);}catch{/* current-tab access still works */}void (async()=>{await refreshAll();void applyStoredLicense();})();render();});
+  document.querySelector<HTMLFormElement>('#admin-access-form')?.addEventListener('submit',(event)=>{event.preventDefault();const token=String(new FormData(event.currentTarget as HTMLFormElement).get('token')||'').trim();if(!token){state.error='Enter the administrator token.';render();return;}state.adminToken=token;state.accessRequired=false;state.error='';try{sessionStorage.setItem(ADMIN_TOKEN_KEY,token);}catch{/* current-tab access still works */}void refreshAll();render();});
 }
 
 function bind():void {
@@ -227,8 +222,6 @@ function bind():void {
   document.querySelector('#copy-digest')?.addEventListener('click',()=>void copyDigest());
   document.querySelector<HTMLFormElement>('#settings-form')?.addEventListener('submit',(e)=>{e.preventDefault();void saveSettings(new FormData(e.currentTarget as HTMLFormElement).get('digest_hour') as string);});
   document.querySelector('#run-retention')?.addEventListener('click',()=>void runRetention());
-  document.querySelector<HTMLFormElement>('#license-form')?.addEventListener('submit',(e)=>{e.preventDefault();void restoreLicense(new FormData(e.currentTarget as HTMLFormElement).get('license') as string);});
-  document.querySelector('#remove-license')?.addEventListener('click',removeLicense);
   document.querySelector('#reset-demo')?.addEventListener('click',()=>void resetDemo());
   document.querySelectorAll('[data-start-real]').forEach((element)=>element.addEventListener('click',()=>void startForReal()));
 }
@@ -242,7 +235,7 @@ function navigate(view:View):void {
   if(view==='digest'&&!state.digest)void loadDigest().then(focusHeading);
 }
 
-async function refreshAll():Promise<void>{ if(state.demoMode){await loadEvents();return;}state.error='';await Promise.all([loadSources(false),loadEvents(false),loadSettings(false),loadLicense(false)]);render(); }
+async function refreshAll():Promise<void>{ if(state.demoMode){await loadEvents();return;}state.error='';await Promise.all([loadSources(false),loadEvents(false),loadSettings(false)]);render(); }
 
 async function loadSources(show=true):Promise<void>{ if(state.demoMode){if(show)render();return;}try{const data=await api<{sources:Source[]}>('/api/sources');state.sources=data.sources;}catch(error){state.error=messageFor(error);}if(show)render(); }
 
@@ -267,7 +260,7 @@ async function deleteSource(id:string):Promise<void>{try{await api(`/api/sources
 
 async function copyCurl():Promise<void>{if(!state.credential)return;const command=`curl -X POST '${location.origin}${state.credential.path}' -H 'Content-Type: application/json' -H 'X-Ledger-Token: ${state.credential.token}' -d '{"type":"deploy.completed","summary":"Production deploy completed","version":"1.0.0"}'`;try{await navigator.clipboard.writeText(command);toast('cURL example copied.');}catch{state.error='Clipboard access was blocked. Select and copy the receiver URL and token above.';render();}}
 
-async function loadDigest(show=false):Promise<void>{if(show){state.digest=null;render();}if(state.demoMode){const events=state.demoEvents.filter((event)=>event.status!=='archived');state.digest={hours:24,generated_at:new Date().toISOString(),total_occurrences:events.reduce((total,event)=>total+event.occurrence_count,0),unread_groups:events.filter((event)=>event.status==='unread').length,events};render();return;}try{state.digest=await api<Digest>(`/api/digest?hours=${state.pro?state.digestHours:24}`);}catch(error){state.error=messageFor(error);}render();}
+async function loadDigest(show=false):Promise<void>{if(show){state.digest=null;render();}if(state.demoMode){const events=state.demoEvents.filter((event)=>event.status!=='archived');state.digest={hours:24,generated_at:new Date().toISOString(),total_occurrences:events.reduce((total,event)=>total+event.occurrence_count,0),unread_groups:events.filter((event)=>event.status==='unread').length,events};render();return;}try{state.digest=await api<Digest>(`/api/digest?hours=${state.digestHours}`);}catch(error){state.error=messageFor(error);}render();}
 
 async function copyDigest():Promise<void>{if(!state.digest)return;const lines=[`Internal Event Ledger — ${state.digest.total_occurrences} arrivals / ${state.digest.hours}h`,`${state.digest.unread_groups} unread groups`,...state.digest.events.map((e)=>`• ${e.summary} — ${e.source_name} ×${e.occurrence_count} [${e.status}]`)];try{await navigator.clipboard.writeText(lines.join('\n'));toast('Digest copied.');}catch{state.error='Clipboard access was blocked by the browser.';render();}}
 
@@ -290,7 +283,7 @@ async function provisionDemo():Promise<void>{
   catch(error){state.loading=false;state.error=state.online?(error as Error).message:'The sample is not cached yet. Reconnect once to load it.';render();}
 }
 
-function applyDemo(workspace:DemoWorkspace,startedAt:number):void{state.demoId=workspace.workspace_id;state.demoStartedAt=startedAt;state.sources=workspace.sources;state.demoEvents=workspace.events;state.digestHour=workspace.digest_hour;state.pro=false;state.loading=false;state.error='';refreshDemoSourceCounts();}
+function applyDemo(workspace:DemoWorkspace,startedAt:number):void{state.demoId=workspace.workspace_id;state.demoStartedAt=startedAt;state.sources=workspace.sources;state.demoEvents=workspace.events;state.digestHour=workspace.digest_hour;state.loading=false;state.error='';refreshDemoSourceCounts();}
 function refreshDemoSourceCounts():void{state.sources=state.sources.map((source)=>{const events=state.demoEvents.filter((event)=>event.source_id===source.id);return {...source,event_count:events.length,unread_count:events.filter((event)=>event.status==='unread').length};});}
 function persistDemo():void{try{localStorage.setItem(DEMO_KEY,JSON.stringify({saved_at:state.demoStartedAt,workspace:{workspace_id:state.demoId,expires_in_seconds:86400,digest_hour:state.digestHour,sources:state.sources,events:state.demoEvents}}));}catch{/* the online demo still works when browser storage is unavailable */}}
 function restoreCachedDemo():boolean{try{const cached=JSON.parse(localStorage.getItem(DEMO_KEY)||'null') as null|{saved_at:number;workspace:DemoWorkspace};if(!cached||Date.now()-cached.saved_at>=86_400_000){localStorage.removeItem(DEMO_KEY);return false;}applyDemo(cached.workspace,cached.saved_at);return true;}catch{localStorage.removeItem(DEMO_KEY);return false;}}
@@ -315,18 +308,6 @@ function toast(message:string):void{const region=document.querySelector('.toast-
 function stored(key:string):string|null{try{return localStorage.getItem(key);}catch{return null;}}
 function save(key:string,value:string):void{try{localStorage.setItem(key,value);}catch{/* private mode: free app remains usable */}}
 
-async function initLicense():Promise<void>{
-  const params=new URLSearchParams(location.search);const returned=params.get('license');
-  if(returned){save(LICENSE_KEY,returned);params.delete('license');history.replaceState({},'',`${location.pathname}${params.size?`?${params}`:''}${location.hash}`);}
-  state.pendingLicense=Boolean(returned||stored(LICENSE_KEY));
-  if(state.pendingLicense)state.licenseNotice='A checkout license is ready to apply after administrator access.';
-}
-
-async function loadLicense(show=true):Promise<void>{if(state.demoMode){if(show)render();return;}try{const data=await api<{pro:boolean}>('/api/license');state.pro=data.pro;}catch(error){state.error=messageFor(error);}if(show)render();}
-async function restoreLicense(token:string):Promise<void>{if(!token.trim()){state.licenseNotice='Paste a license token to restore your purchase.';render();return;}try{const result=await api<{pro:boolean;notice:string}>('/api/license',{method:'PUT',body:JSON.stringify({license:token.trim()})});save(LICENSE_KEY,token.trim());state.pro=result.pro;state.licenseNotice=result.notice;render();}catch(error){state.licenseNotice=messageFor(error);render();}}
-async function removeLicense():Promise<void>{try{await api('/api/license',{method:'DELETE'});localStorage.removeItem(LICENSE_KEY);state.pro=false;state.licenseNotice='License removed from this server and this browser.';}catch(error){state.licenseNotice=messageFor(error);}render();}
-async function applyStoredLicense():Promise<void>{const token=stored(LICENSE_KEY);if(!token||!state.adminToken)return;state.pendingLicense=false;try{const result=await api<{pro:boolean;notice:string}>('/api/license',{method:'PUT',body:JSON.stringify({license:token})});state.pro=result.pro;state.licenseNotice=result.notice;}catch(error){state.licenseNotice=`The saved checkout license could not be applied: ${messageFor(error)} You can retry from Settings.`;}render();}
-
 window.addEventListener('popstate',()=>{
   state.view=routeView();state.demoMode=location.pathname==='/demo';state.accessRequired=!state.demoMode&&!state.adminToken;render();focusHeading();
   if(state.view==='digest'&&!state.digest)void loadDigest().then(focusHeading);
@@ -335,15 +316,13 @@ window.addEventListener('online',()=>{state.online=true;if(state.demoMode&&!stat
 window.addEventListener('offline',()=>{state.online=false;render();});
 
 async function start():Promise<void>{
-  await initLicense();
   if('serviceWorker' in navigator)registerServiceWorker();
   if(startsInDemo){if(location.pathname!=='/demo')history.replaceState({},'','/demo');state.view=routeView();state.demoMode=true;state.accessRequired=false;const restored=restoreCachedDemo();render();if(!restored){if(state.online)await provisionDemo();else{state.loading=false;state.error='The sample is not cached yet. Reconnect once to load it.';render();}}else await loadEvents();if(state.view==='digest')await loadDigest();return;}
   render();
   if(state.accessRequired)return;
   if(!state.online){state.loading=false;state.error='You are offline. Reconnect to refresh the ledger.';render();return;}
+  state.digestHours=Math.min(168,Math.max(1,Number(stored('ledger:digest-window'))||24));
   await refreshAll();
-  void applyStoredLicense();
-  if(state.pro)state.digestHours=Math.min(168,Math.max(1,Number(stored('ledger:digest-window'))||24));
   if(state.view==='digest')await loadDigest();else render();
 }
 

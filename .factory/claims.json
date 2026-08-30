@@ -84,25 +84,11 @@
     "sandbox": "fresh database; create one signed source; send two signed fixture events; assert grouped count, redaction, and discarded credentials"
   },
   {
-    "id": "plan-limits",
-    "claim": "Free accepts five sources and 30-day retention; a verified Pro license adds sources, 10-year retention, and custom digest windows.",
-    "where": "landing pricing, settings, terms, README",
-    "test": "npm run test:claims -- --grep @claim:plan-limits",
-    "sandbox": "fresh database and recorded local Sociobot verdict; assert free rejection boundaries, apply fixture license, then assert Pro boundaries"
-  },
-  {
-    "id": "license-verification-cache",
-    "claim": "The server reuses a valid license verdict for up to 24 hours before verifying it again.",
-    "where": "settings, privacy page, README",
-    "test": "npm run test:claims -- --grep @claim:license-verification-cache",
-    "sandbox": "record verification calls; assert repeated reads and a 86399-second-old verdict make no call; age it beyond 86400 seconds and assert exactly one new call"
-  },
-  {
-    "id": "checkout-availability",
-    "claim": "The $39 Pro purchase opens Sociobot's hosted checkout.",
-    "where": "landing pricing, settings, terms, README",
-    "test": "npm run test:claims -- --grep @claim:checkout-availability",
-    "sandbox": "read the public Sociobot product catalog; assert the exact name and $39 USD price; open checkout without following the redirect or submitting payment; assert a Dodo hosted-checkout redirect"
+    "id": "self-hosted-controls",
+    "claim": "The self-hosted ledger supports more than five sources, up to 10-year retention, and custom digest windows without an external service.",
+    "where": "landing facts, sources, digest, settings, README",
+    "test": "npm run test:claims -- --grep @claim:self-hosted-controls",
+    "sandbox": "fresh SQLite database; create six 3650-day sources and request a six-hour digest; assert both succeed without a remote dependency"
   },
   {
     "id": "api-rate-limit",

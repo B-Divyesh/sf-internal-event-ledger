@@ -31,8 +31,6 @@ async fn main() -> anyhow::Result<()> {
     );
     let (admin_token, admin_token_source) =
         load_or_create_admin_token(env::var("ADMIN_TOKEN").ok(), &admin_token_path)?;
-    let billing_api_base = env::var("BILLING_API_BASE")
-        .unwrap_or_else(|_| "https://api.sociobot.in/api/v1/products/internal-event-ledger".into());
     let pool = create_pool(&database_url).await?;
     let trusted_proxy_ips: HashSet<IpAddr> = env::var("TRUSTED_PROXY_IPS")
         .ok()
@@ -49,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     let trusted_proxy_count = trusted_proxy_ips.len();
     let managed_ingress =
         env::var("CONTAINER_APP_NAME").is_ok() && env::var("CONTAINER_APP_REVISION").is_ok();
-    let state = AppState::new(pool, admin_token, billing_api_base)
+    let state = AppState::new(pool, admin_token)
         .with_trusted_proxy_ips(trusted_proxy_ips)
         .with_managed_ingress(managed_ingress);
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;

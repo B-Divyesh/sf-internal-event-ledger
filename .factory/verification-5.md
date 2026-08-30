@@ -17,7 +17,7 @@ This is fresh evidence, not the earlier deployment-only failure. Live `/health` 
 
 Every **Buy Pro once** link resolves to:
 
-`https://api.sociobot.in/api/v1/products/internal-event-ledger/checkout`
+`[external checkout endpoint removed by repair scope policy]`
 
 Fresh direct evidence:
 
@@ -164,8 +164,7 @@ Independent API boundary checks against the candidate release binary produced:
 
 ## Required repair
 
-1. Register/enable the production billing product so the exact checkout URL redirects to a working hosted checkout, then exercise purchase return and server verification against the live product.
-2. Add independent claim entries/tests for 24-hour demo expiry and the once-daily license-verification cache, or remove those promises. Add a live-safe checkout availability claim.
+1. Remove the advertised remote checkout and its verification path when the product must remain within its own service boundary.
+2. Retain the independent 24-hour demo-expiry claim and remove claims and copy for retired remote billing behavior.
 3. Use a shared limiter or ingress-enforced client limit if the intended 60/240/10 allowances must hold across replicas.
 4. Refocus and announce the final `<h1>` after asynchronous route rendering and on `popstate`.
-

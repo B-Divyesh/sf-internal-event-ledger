@@ -38,7 +38,7 @@ Release builds should pass the full source identity without relying on `.git`: `
 Requirements: Node 22+, npm 10+, and Rust 1.88+.
 
 ```sh
-npm install
+npm ci
 npm run dev          # frontend at http://localhost:5173, proxies the API
 npm run dev:server   # backend at http://localhost:8080 (second terminal)
 npm test             # frontend, Rust, container, and browser claim tests
@@ -63,7 +63,6 @@ Configuration is environment-only:
 | `RUST_LOG` | JSON info logs | Tracing filter |
 | `ADMIN_TOKEN` | generated and persisted | Optional high-entropy override for administrative browser and API access |
 | `ADMIN_TOKEN_FILE` | `.internal-event-ledger-admin-token` natively; `/data/admin-token` in the image | Generated-token location |
-| `BILLING_API_BASE` | Sociobot production API | Server-side Pro license verification endpoint (override for staging) |
 | `TRUSTED_PROXY_IPS` | private/loopback ingress peers | Extra comma-separated proxy IPs whose first `X-Forwarded-For` address is used for client rate limiting |
 | `BUILD_SHA` | `dev` | Compile-time `/health` identity; release builds pass the full commit SHA as a build argument |
 
@@ -89,11 +88,11 @@ Credential headers (`Authorization`, `Cookie`, ledger token, and signature) are 
 - `GET /api/export?format=json` and `?format=csv` export the complete current record and are never paywalled.
 - `GET /health` returns service status and build SHA.
 
-All management APIs, exports, event review, settings, retention, and licensing require `Authorization: Bearer $ADMIN_TOKEN`; receiver ingestion continues to use each source’s separate receiver token. The free tier supports five sources and 30-day source retention. A $39 one-time Pro license unlocks unlimited sources, longer retention, and custom digest windows. These limits are enforced by the server for direct API requests as well as the UI. When an administrator applies a license in Settings, the server verifies it with Sociobot and caches the verdict for up to 24 hours; an unavailable or invalid verification safely falls back to free limits. Checkout and verification use only the Sociobot billing API; no payment provider is embedded.
+All management APIs, exports, event review, settings, and retention require `Authorization: Bearer $ADMIN_TOKEN`; receiver ingestion continues to use each source’s separate receiver token. A deployment can create more than five sources, retain each source for up to 10 years, and choose digest windows from 6 hours to 7 days. These controls are enforced directly by the server and do not need a remote account or service.
 
 ## Privacy and security
 
-There are no analytics, trackers, third-party fonts, or runtime CDN assets. Operational data stays in the deployment’s SQLite database. A restored license is retained in browser local storage and, when applied, in the server database so the server can perform its daily verification. Read the in-product `/privacy` and `/terms` pages for the full notices.
+There are no analytics, trackers, third-party fonts, runtime CDN assets, billing calls, or identity calls. Operational data stays in the deployment’s SQLite database. Read the in-product `/privacy` and `/terms` pages for the full notices.
 
 Back up the `/data` volume and place the service behind HTTPS. The application itself enforces an administrator boundary; a reverse-proxy identity layer can be added as defense in depth. Ingest endpoints have individual high-entropy tokens; HMAC is recommended when the sender supports it. Every API client is rate limited before authentication and receives `429` with `Retry-After` when the allowance is spent. Authenticated deliveries also have a separate receiver quota, so unauthenticated traffic cannot spend it. Private and loopback ingress peers use the first forwarded address; public peers must be listed in `TRUSTED_PROXY_IPS`. Hashed frontend assets are immutable-cached, while HTML and `sw.js` revalidate.
 
