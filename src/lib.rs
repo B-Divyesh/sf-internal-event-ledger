@@ -114,19 +114,12 @@ pub struct AppState {
     billing_api_base: Arc<str>,
     http: reqwest::Client,
     ingest_limits: Arc<Mutex<HashMap<String, IngestBucket>>>,
-    api_limits: Arc<Mutex<HashMap<String, IngestBucket>>>,
-    demos: Arc<Mutex<HashMap<String, DemoWorkspace>>>,
     trusted_proxy_ips: Arc<HashSet<IpAddr>>,
 }
 
 struct IngestBucket {
     tokens: f64,
     updated_at: Instant,
-}
-
-struct DemoWorkspace {
-    created_at: Instant,
-    payload: Value,
 }
 
 impl AppState {
@@ -137,8 +130,6 @@ impl AppState {
             billing_api_base: Arc::from(billing_api_base.trim_end_matches('/').to_owned()),
             http: reqwest::Client::new(),
             ingest_limits: Arc::new(Mutex::new(HashMap::new())),
-            api_limits: Arc::new(Mutex::new(HashMap::new())),
-            demos: Arc::new(Mutex::new(HashMap::new())),
             trusted_proxy_ips: Arc::new(HashSet::new()),
         }
     }
@@ -152,6 +143,14 @@ impl AppState {
 pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
     let pool = SqlitePoolOptions::new()
         .max_connections(8)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("PRAGMA busy_timeout = 5000")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect(url)
         .await?;
     sqlx::migrate!().run(&pool).await?;
@@ -334,7 +333,11 @@ async fn limit_api_requests(
     next: Next,
 ) -> Response {
     let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    if !take_request_token(&state.api_limits, "api", address, 60.0, 20.0) {
+    let allowed = match take_shared_request_token(&state.pool, "api", address, 60.0, 20.0).await {
+        Ok(allowed) => allowed,
+        Err(error) => return error.into_response(),
+    };
+    if !allowed {
         return ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "This client is sending API requests too quickly. Try again shortly.".into(),
@@ -352,7 +355,12 @@ async fn limit_ingest_requests(
     next: Next,
 ) -> Response {
     let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    if !take_request_token(&state.api_limits, "ingest", address, 240.0, 40.0) {
+    let allowed = match take_shared_request_token(&state.pool, "ingest", address, 240.0, 40.0).await
+    {
+        Ok(allowed) => allowed,
+        Err(error) => return error.into_response(),
+    };
+    if !allowed {
         return ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "This client is sending receiver requests too quickly. Try again shortly.".into(),
@@ -362,36 +370,53 @@ async fn limit_ingest_requests(
     next.run(request).await
 }
 
-fn take_request_token(
-    limits: &Mutex<HashMap<String, IngestBucket>>,
+async fn take_shared_request_token(
+    pool: &SqlitePool,
     scope: &str,
     address: Option<IpAddr>,
     capacity: f64,
     refill_per_second: f64,
-) -> bool {
+) -> Result<bool, ApiError> {
     let key = format!(
         "{scope}:{}",
         address
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "direct".into())
     );
-    let now = Instant::now();
-    let mut limits = limits.lock().expect("request rate-limit lock");
-    if limits.len() > 10_000 {
-        limits.retain(|_, bucket| now.duration_since(bucket.updated_at).as_secs() < 600);
+    let now_ms = Utc::now().timestamp_millis();
+    let accepted = sqlx::query_scalar::<_, String>(
+        r#"INSERT INTO request_rate_limits(bucket_key,tokens,updated_at_ms)
+           VALUES(?, ? - 1.0, ?)
+           ON CONFLICT(bucket_key) DO UPDATE SET
+             tokens = MIN(?, request_rate_limits.tokens +
+               MAX(0.0, (? - request_rate_limits.updated_at_ms) / 1000.0) * ?) - 1.0,
+             updated_at_ms = ?
+           WHERE MIN(?, request_rate_limits.tokens +
+             MAX(0.0, (? - request_rate_limits.updated_at_ms) / 1000.0) * ?) >= 1.0
+           RETURNING bucket_key"#,
+    )
+    .bind(&key)
+    .bind(capacity)
+    .bind(now_ms)
+    .bind(capacity)
+    .bind(now_ms)
+    .bind(refill_per_second)
+    .bind(now_ms)
+    .bind(capacity)
+    .bind(now_ms)
+    .bind(refill_per_second)
+    .fetch_optional(pool)
+    .await?;
+
+    // Bound storage used by spoof-resistant client keys. Cleanup is deliberately
+    // opportunistic so it does not add a write to every request.
+    if now_ms.rem_euclid(257) == 0 {
+        let _ = sqlx::query("DELETE FROM request_rate_limits WHERE updated_at_ms < ?")
+            .bind(now_ms - 86_400_000)
+            .execute(pool)
+            .await;
     }
-    let bucket = limits.entry(key).or_insert(IngestBucket {
-        tokens: capacity,
-        updated_at: now,
-    });
-    let elapsed = now.duration_since(bucket.updated_at).as_secs_f64();
-    bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(capacity);
-    bucket.updated_at = now;
-    if bucket.tokens < 1.0 {
-        return false;
-    }
-    bucket.tokens -= 1.0;
-    true
+    Ok(accepted.is_some())
 }
 
 #[derive(Debug)]
@@ -424,7 +449,7 @@ async fn create_demo(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    if !take_request_token(&state.api_limits, "demo-create", address, 10.0, 1.0 / 60.0) {
+    if !take_shared_request_token(&state.pool, "demo-create", address, 10.0, 1.0 / 60.0).await? {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "This client created too many demos. Try again shortly.".into(),
@@ -432,16 +457,19 @@ async fn create_demo(
     }
     let id = Uuid::new_v4().to_string();
     let payload = demo_payload(&id);
-    let now = Instant::now();
-    let mut demos = state.demos.lock().expect("demo workspace lock");
-    demos.retain(|_, workspace| now.duration_since(workspace.created_at).as_secs() < 86_400);
-    demos.insert(
-        id,
-        DemoWorkspace {
-            created_at: now,
-            payload: payload.clone(),
-        },
-    );
+    let now = Utc::now().timestamp();
+    sqlx::query("DELETE FROM demo_workspaces WHERE created_at_unix <= ?")
+        .bind(now - 86_400)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO demo_workspaces(workspace_id,payload_json,created_at_unix) VALUES(?,?,?)",
+    )
+    .bind(&id)
+    .bind(payload.to_string())
+    .bind(now)
+    .execute(&state.pool)
+    .await?;
     Ok(Json(payload))
 }
 
@@ -449,23 +477,42 @@ async fn get_demo(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let now = Instant::now();
-    let mut demos = state.demos.lock().expect("demo workspace lock");
-    demos.retain(|_, workspace| now.duration_since(workspace.created_at).as_secs() < 86_400);
-    demos
-        .get(&id)
-        .map(|workspace| Json(workspace.payload.clone()))
-        .ok_or_else(|| {
-            ApiError(
-                StatusCode::NOT_FOUND,
-                "This demo expired. Reset the demo to load a fresh sample.".into(),
-            )
-        })
+    let now = Utc::now().timestamp();
+    sqlx::query("DELETE FROM demo_workspaces WHERE created_at_unix <= ?")
+        .bind(now - 86_400)
+        .execute(&state.pool)
+        .await?;
+    let payload = sqlx::query_scalar::<_, String>(
+        "SELECT payload_json FROM demo_workspaces WHERE workspace_id=?",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            "This demo expired. Reset the demo to load a fresh sample.".into(),
+        )
+    })?;
+    let payload = serde_json::from_str(&payload).map_err(|error| {
+        tracing::error!(%error, "stored demo workspace is invalid");
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The sample workspace could not be loaded. Reset the demo to try again.".into(),
+        )
+    })?;
+    Ok(Json(payload))
 }
 
-async fn delete_demo(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
-    state.demos.lock().expect("demo workspace lock").remove(&id);
-    StatusCode::NO_CONTENT
+async fn delete_demo(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    sqlx::query("DELETE FROM demo_workspaces WHERE workspace_id=?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn demo_payload(workspace_id: &str) -> Value {
@@ -1084,7 +1131,10 @@ async fn update_license(
             "Paste a valid license token.".into(),
         ));
     }
-    let verdict = verify_license(&s, token).await?;
+    let verdict = match cached_license_verdict(&s, token).await? {
+        Some(verdict) => verdict,
+        None => verify_license(&s, token).await?,
+    };
     if !verdict {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
@@ -1117,13 +1167,8 @@ async fn has_valid_server_license(s: &AppState) -> Result<bool, ApiError> {
     let Some(token) = get_setting(&s.pool, "license_token").await? else {
         return Ok(false);
     };
-    let checked_at = get_setting(&s.pool, "license_checked_at")
-        .await?
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(0);
-    let cached_valid = get_setting(&s.pool, "license_valid").await?.as_deref() == Some("true");
-    if cached_valid && Utc::now().timestamp() - checked_at < 86_400 {
-        return Ok(true);
+    if let Some(verdict) = cached_license_verdict(s, &token).await? {
+        return Ok(verdict);
     }
     let valid = verify_license(s, &token).await.unwrap_or(false);
     set_setting(
@@ -1139,6 +1184,21 @@ async fn has_valid_server_license(s: &AppState) -> Result<bool, ApiError> {
     )
     .await?;
     Ok(valid)
+}
+
+async fn cached_license_verdict(s: &AppState, token: &str) -> Result<Option<bool>, ApiError> {
+    if get_setting(&s.pool, "license_token").await?.as_deref() != Some(token) {
+        return Ok(None);
+    }
+    let checked_at = get_setting(&s.pool, "license_checked_at")
+        .await?
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    let cached_valid = get_setting(&s.pool, "license_valid").await?.as_deref() == Some("true");
+    if (0..86_400).contains(&(Utc::now().timestamp() - checked_at)) {
+        return Ok(Some(cached_valid));
+    }
+    Ok(None)
 }
 
 async fn verify_license(s: &AppState, token: &str) -> Result<bool, ApiError> {

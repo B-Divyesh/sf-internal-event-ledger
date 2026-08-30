@@ -8,7 +8,7 @@ This is not a pager, retrying webhook proxy, automation engine, or guaranteed-de
 
 ## Try the isolated demo
 
-Open `/demo` or choose **Try it with sample data** on the first screen. The server creates a random in-memory workspace with three sources and five grouped events. It expires after 24 hours and never reads or writes the operator's SQLite ledger. **Reset demo** starts a clean sample, and **Start for real** discards it before showing administrator access.
+Open `/demo` or choose **Try it with sample data** on the first screen. The server creates a random workspace with three sources and five grouped events in a dedicated demo table. It expires after 24 hours and never reads or writes the operator's source or event tables. **Reset demo** starts a clean sample, and **Start for real** discards it before showing administrator access.
 
 The browser keeps the sample in the separate `demo:internal-event-ledger:workspace` namespace, so `/demo` remains readable offline after its first visit. No account or administrator token is needed.
 

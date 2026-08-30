@@ -14,6 +14,13 @@
     "sandbox": "fresh production database with a sentinel source; use demo without auth; assert only demo API calls and unchanged production events"
   },
   {
+    "id": "demo-expiry",
+    "claim": "Sample workspaces expire after 24 hours.",
+    "where": "demo navigation, README demo section, .factory/demo.md",
+    "test": "npm run test:claims -- --grep @claim:demo-expiry",
+    "sandbox": "create a fresh server-side demo; assert its 86400-second deadline; advance its stored creation time by exactly 24 hours; assert the demo API returns the expired state"
+  },
+  {
     "id": "self-hosted-runtime",
     "claim": "The product starts as a self-hosted SQLite service with only PORT configured.",
     "where": "landing facts, README run and privacy sections",
@@ -84,10 +91,24 @@
     "sandbox": "fresh database and recorded local Sociobot verdict; assert free rejection boundaries, apply fixture license, then assert Pro boundaries"
   },
   {
+    "id": "license-verification-cache",
+    "claim": "The server reuses a valid license verdict for up to 24 hours before verifying it again.",
+    "where": "settings, privacy page, README",
+    "test": "npm run test:claims -- --grep @claim:license-verification-cache",
+    "sandbox": "record verification calls; assert repeated reads and a 86399-second-old verdict make no call; age it beyond 86400 seconds and assert exactly one new call"
+  },
+  {
+    "id": "checkout-availability",
+    "claim": "The $39 Pro purchase opens Sociobot's hosted checkout.",
+    "where": "landing pricing, settings, terms, README",
+    "test": "npm run test:claims -- --grep @claim:checkout-availability",
+    "sandbox": "read the public Sociobot product catalog; assert the exact name and $39 USD price; open checkout without following the redirect or submitting payment; assert a Dodo hosted-checkout redirect"
+  },
+  {
     "id": "api-rate-limit",
     "claim": "Management and receiver API clients are rate limited and receive Retry-After when limited.",
     "where": "README security section",
     "test": "npm run test:claims -- --grep @claim:api-rate-limit",
-    "sandbox": "fresh server; send an authenticated management burst from one forwarded client; assert 429 and Retry-After"
+    "sandbox": "two server processes sharing one SQLite database; split a concurrent 120-request burst from one forwarded client across both; assert one shared 60-request allowance, 429, and Retry-After"
   }
 ]

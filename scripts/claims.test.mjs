@@ -11,6 +11,7 @@ import { chromium } from 'playwright';
 const requested = process.argv.includes('--grep') ? process.argv[process.argv.indexOf('--grep') + 1] : '';
 const adminToken = 'claim-test-administrator';
 const workDir = await mkdtemp(join(tmpdir(), 'ledger-claims-'));
+let billingVerificationCount = 0;
 
 async function freePort() {
   return await new Promise((resolve, reject) => {
@@ -25,6 +26,7 @@ async function freePort() {
 
 const billingServer = createServer((request, response) => {
   const url = new URL(request.url, 'http://fixture.test');
+  if (url.pathname === '/verify') billingVerificationCount += 1;
   const valid = url.pathname === '/verify' && url.searchParams.get('license') === 'recorded-valid-license';
   response.writeHead(200, { 'content-type': 'application/json' });
   response.end(JSON.stringify({ valid, reason: valid ? 'ok' : 'invalid', expires_at: null }));
@@ -96,6 +98,28 @@ claim('demo-sandbox', async () => {
   await context.close();
 });
 
+claim('demo-expiry', async () => {
+  const created = await fetch(`${base}/api/demo`, {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '203.0.113.72' },
+  });
+  assert.equal(created.status, 200);
+  const workspace = await created.json();
+  assert.equal(workspace.expires_in_seconds, 86_400);
+
+  const { DatabaseSync } = await import('node:sqlite');
+  const database = new DatabaseSync(join(workDir, 'claims.db'));
+  database.prepare('UPDATE demo_workspaces SET created_at_unix = ? WHERE workspace_id = ?')
+    .run(Math.floor(Date.now() / 1000) - 86_400, workspace.workspace_id);
+  database.close();
+
+  const expired = await fetch(`${base}/api/demo/${workspace.workspace_id}`, {
+    headers: { 'x-forwarded-for': '203.0.113.73' },
+  });
+  assert.equal(expired.status, 404);
+  assert.match((await expired.json()).error, /demo expired/i);
+});
+
 claim('self-hosted-runtime', async () => {
   const runtimeDir = join(workDir, 'port-only-runtime');
   await mkdir(runtimeDir);
@@ -143,9 +167,16 @@ claim('review-workflow', async () => {
   page.once('dialog', (dialog) => dialog.accept());
   await mapping.getByRole('button', { name: 'Archive event' }).click();
   await mapping.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: 'Sources', exact: true }).click();
+  await page.getByRole('heading', { name: 'Incoming sources' }).waitFor();
   await page.getByRole('button', { name: 'Digest' }).click();
   await page.getByRole('heading', { name: 'Daily digest' }).waitFor();
+  await page.locator('.digest-number').waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.tagName), 'H1');
   assert.equal(await page.locator('.digest-number strong').textContent(), '11');
+  await page.goBack();
+  await page.getByRole('heading', { name: 'Incoming sources' }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.tagName), 'H1');
   await context.close();
 });
 
@@ -310,15 +341,93 @@ claim('plan-limits', async () => {
   await fetch(`${base}/api/license`, { method: 'DELETE', headers: auth });
 });
 
-claim('api-rate-limit', async () => {
-  let limited;
-  for (let index = 0; index < 180; index += 1) {
-    const response = await fetch(`${base}/api/events`, { headers: { authorization: `Bearer ${adminToken}`, 'x-forwarded-for': '203.0.113.90' } });
-    if (response.status === 429) { limited = response; break; }
-    assert.equal(response.status, 200);
+claim('license-verification-cache', async () => {
+  await fetch(`${base}/api/license`, { method: 'DELETE', headers: auth });
+  const before = billingVerificationCount;
+  const applied = await fetch(`${base}/api/license`, {
+    method: 'PUT',
+    headers: auth,
+    body: JSON.stringify({ license: 'recorded-valid-license' }),
+  });
+  assert.equal(applied.status, 200);
+  assert.equal(billingVerificationCount, before + 1);
+
+  for (let index = 0; index < 5; index += 1) {
+    const cached = await fetch(`${base}/api/license`, { headers: auth });
+    assert.equal(cached.status, 200);
+    assert.equal((await cached.json()).pro, true);
   }
-  assert.ok(limited, 'management API burst should reach 429');
-  assert.equal(limited.headers.get('retry-after'), '1');
+  const reapplied = await fetch(`${base}/api/license`, {
+    method: 'PUT',
+    headers: auth,
+    body: JSON.stringify({ license: 'recorded-valid-license' }),
+  });
+  assert.equal(reapplied.status, 200);
+  assert.equal(billingVerificationCount, before + 1, 'cached reads must not call verification again');
+
+  const { DatabaseSync } = await import('node:sqlite');
+  const database = new DatabaseSync(join(workDir, 'claims.db'));
+  const setCheckedAt = database.prepare("UPDATE settings SET value=? WHERE key='license_checked_at'");
+  setCheckedAt.run(String(Math.floor(Date.now() / 1000) - 86_399));
+  assert.equal((await fetch(`${base}/api/license`, { headers: auth })).status, 200);
+  assert.equal(billingVerificationCount, before + 1, 'a verdict younger than 24 hours stays cached');
+
+  setCheckedAt.run(String(Math.floor(Date.now() / 1000) - 86_401));
+  database.close();
+  assert.equal((await fetch(`${base}/api/license`, { headers: auth })).status, 200);
+  assert.equal(billingVerificationCount, before + 2, 'a verdict older than 24 hours is verified again');
+  await fetch(`${base}/api/license`, { method: 'DELETE', headers: auth });
+});
+
+claim('checkout-availability', async () => {
+  const catalog = await fetch('https://api.sociobot.in/api/v1/products');
+  assert.equal(catalog.status, 200);
+  const product = (await catalog.json()).data.find((item) => item.slug === 'internal-event-ledger');
+  assert.deepEqual(
+    product && { name: product.name, price_minor: product.price_minor, currency: product.currency },
+    { name: 'Internal Event Ledger Pro', price_minor: 3900, currency: 'USD' },
+  );
+  const checkout = await fetch(product.checkout_url, { redirect: 'manual' });
+  assert.equal(checkout.status, 303);
+  assert.match(checkout.headers.get('location') || '', /^https:\/\/checkout\.dodopayments\.com\//);
+});
+
+claim('api-rate-limit', async () => {
+  const replicaPort = await freePort();
+  const replica = spawn(join(process.cwd(), 'target/debug/internal-event-ledger'), [], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(replicaPort),
+      DATABASE_URL: `sqlite://${join(workDir, 'claims.db')}?mode=rwc`,
+      STATIC_DIR: join(process.cwd(), 'dist'),
+      ADMIN_TOKEN: adminToken,
+      BILLING_API_BASE: `http://127.0.0.1:${billingPort}`,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let replicaOutput = '';
+  replica.stdout.on('data', (chunk) => { replicaOutput += chunk; });
+  replica.stderr.on('data', (chunk) => { replicaOutput += chunk; });
+  try {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try { if ((await fetch(`http://127.0.0.1:${replicaPort}/health`)).ok) break; } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (attempt === 99) throw new Error(`second limiter replica did not start\n${replicaOutput}`);
+    }
+    const responses = await Promise.all(Array.from({ length: 120 }, (_, index) => {
+      const origin = index % 2 ? base : `http://127.0.0.1:${replicaPort}`;
+      return fetch(`${origin}/api/events`, { headers: { authorization: `Bearer ${adminToken}`, 'x-forwarded-for': '203.0.113.90' } });
+    }));
+    const allowed = responses.filter((response) => response.status === 200).length;
+    const limited = responses.filter((response) => response.status === 429);
+    assert.ok(allowed >= 58 && allowed <= 62, `shared 60-request burst allowed ${allowed}`);
+    assert.ok(limited.length >= 58);
+    assert.ok(limited.every((response) => response.headers.get('retry-after') === '1'));
+  } finally {
+    replica.kill('SIGTERM');
+    if (replica.exitCode === null) await new Promise((resolve) => replica.once('exit', resolve));
+  }
 });
 
 after(async () => {

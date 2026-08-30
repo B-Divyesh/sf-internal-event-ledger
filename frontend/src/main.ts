@@ -239,7 +239,7 @@ function navigate(view:View):void {
   const url=view==='privacy'||view==='terms'?`/${view}`:`${state.demoMode?'/demo':'/'}#${view}`;
   history.pushState({},'',url); render();
   focusHeading();
-  if(view==='digest'&&!state.digest)void loadDigest();
+  if(view==='digest'&&!state.digest)void loadDigest().then(focusHeading);
 }
 
 async function refreshAll():Promise<void>{ if(state.demoMode){await loadEvents();return;}state.error='';await Promise.all([loadSources(false),loadEvents(false),loadSettings(false),loadLicense(false)]);render(); }
@@ -295,7 +295,14 @@ function refreshDemoSourceCounts():void{state.sources=state.sources.map((source)
 function persistDemo():void{try{localStorage.setItem(DEMO_KEY,JSON.stringify({saved_at:state.demoStartedAt,workspace:{workspace_id:state.demoId,expires_in_seconds:86400,digest_hour:state.digestHour,sources:state.sources,events:state.demoEvents}}));}catch{/* the online demo still works when browser storage is unavailable */}}
 function restoreCachedDemo():boolean{try{const cached=JSON.parse(localStorage.getItem(DEMO_KEY)||'null') as null|{saved_at:number;workspace:DemoWorkspace};if(!cached||Date.now()-cached.saved_at>=86_400_000){localStorage.removeItem(DEMO_KEY);return false;}applyDemo(cached.workspace,cached.saved_at);return true;}catch{localStorage.removeItem(DEMO_KEY);return false;}}
 
-function focusHeading():void{const heading=document.querySelector<HTMLElement>('h1');if(!heading)return;heading.tabIndex=-1;heading.focus();}
+function focusHeading():void{
+  const heading=document.querySelector<HTMLElement>('h1');
+  if(!heading)return;
+  heading.tabIndex=-1;
+  heading.focus();
+  const announcer=document.querySelector<HTMLElement>('#route-announcer');
+  if(announcer)announcer.textContent=heading.textContent||'';
+}
 
 function updatePageMetadata():void{
   const title=state.demoMode?'Demo — Internal Event Ledger':state.view==='privacy'?'Privacy — Internal Event Ledger':state.view==='terms'?'Terms — Internal Event Ledger':state.accessRequired?'Internal Event Ledger — review webhook events':`${state.view[0].toUpperCase()+state.view.slice(1)} — Internal Event Ledger`;
@@ -320,7 +327,10 @@ async function restoreLicense(token:string):Promise<void>{if(!token.trim()){stat
 async function removeLicense():Promise<void>{try{await api('/api/license',{method:'DELETE'});localStorage.removeItem(LICENSE_KEY);state.pro=false;state.licenseNotice='License removed from this server and this browser.';}catch(error){state.licenseNotice=messageFor(error);}render();}
 async function applyStoredLicense():Promise<void>{const token=stored(LICENSE_KEY);if(!token||!state.adminToken)return;state.pendingLicense=false;try{const result=await api<{pro:boolean;notice:string}>('/api/license',{method:'PUT',body:JSON.stringify({license:token})});state.pro=result.pro;state.licenseNotice=result.notice;}catch(error){state.licenseNotice=`The saved checkout license could not be applied: ${messageFor(error)} You can retry from Settings.`;}render();}
 
-window.addEventListener('popstate',()=>{state.view=routeView();state.demoMode=location.pathname==='/demo';state.accessRequired=!state.demoMode&&!state.adminToken;render();});
+window.addEventListener('popstate',()=>{
+  state.view=routeView();state.demoMode=location.pathname==='/demo';state.accessRequired=!state.demoMode&&!state.adminToken;render();focusHeading();
+  if(state.view==='digest'&&!state.digest)void loadDigest().then(focusHeading);
+});
 window.addEventListener('online',()=>{state.online=true;if(state.demoMode&&!state.demoId)void provisionDemo();else void refreshAll();});
 window.addEventListener('offline',()=>{state.online=false;render();});
 
