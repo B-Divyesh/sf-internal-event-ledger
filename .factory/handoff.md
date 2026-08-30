@@ -43,10 +43,19 @@ Evidence is under `.factory/evidence/repair-5-*` and `.factory/evidence/lighthou
 
 ## Deployment
 
-Container deployment and final live SHA verification are recorded below after the release commit is built by ACR.
+- First cloud attempt `ch1d0` failed because the Rust compile-time 404 template was absent from the server-builder stage. The Dockerfile now copies that exact source asset, and the container contract prevents regression.
+- Corrected ACR build `ch1d5`: PASS in 6m52s for source `09a29bf6f269ece2fe3c4bfb79a240d3e62021ca`.
+- Azure Container App rollout, DNS, managed certificate, and HTTPS: PASS.
+- Live `/health`: `{"build":"09a29bf6f269ece2fe3c4bfb79a240d3e62021ca","status":"ok"}`.
+- Live routes: `/`, `/demo`, `/privacy`, `/terms`, `/robots.txt`, `/sitemap.xml`, and `/404.html` return 200; an unknown route returns the designed document with 404.
+- Live browser: desktop and 390px landing/demo have one h1/main, no overflow or console errors, visible keyboard focus, five sample groups, same-origin requests only, and zero Axe violations. Privacy and Terms also have zero Axe violations.
+- Live offline: a fresh `/demo` context retained all five groups after the network was disabled and the page reloaded.
+- Live anonymous rate burst: 141×401 followed by 39×429, with `Retry-After: 1`.
+- Live cache policy: hashed JS is one-year immutable; `sw.js` and HTML are `no-cache`.
+- Live Lighthouse mobile: performance 100, accessibility 100, best practices 100, SEO 100; LCP 1.7 s, CLS 0, total blocking time 0 ms, transfer 121 KiB.
+
+The final handoff/evidence-only commit is redeployed after this record so live build identity matches repository HEAD.
 
 ## Known gaps
 
-Docker/Podman is not installed in the worker container, so the image cannot be built locally. The required factory ACR build is the container/package verification and must pass before this handoff is final.
-
-The first ACR attempt (`ch1d0`) caught that Rust's compile-time 404 template was absent from the server-builder stage. The Dockerfile now copies that exact source asset, with a contract regression; the replacement cloud build is pending.
+None release-blocking. Docker/Podman is unavailable locally, but the factory ACR build completed successfully from the source tarball and the resulting image passed live verification.
