@@ -22,6 +22,10 @@ that the controller flagged. Runtime state is SQLite only, persisted under
   limiter uses its own sibling SQLite sidecar (`ledger-rate-limits.db`), so a
   legacy ledger can come online before an older revision releases its file
   lock.
+- Bound the configured `PORT` before opening SQLite and retry a temporary
+  SQLite lock during a rolling replacement. This lets the platform retire the
+  previous single-writer revision before the new process needs the durable
+  ledger file.
 - Added `scripts/forbidden-resource.test.mjs` and `npm run
   test:forbidden-resources`. It recursively checks repository source,
   configuration, documentation, and test files for prohibited service,
@@ -42,7 +46,7 @@ redaction, CSV export, offline demo reload, and a no-tracking request policy.
 All checks below ran from this clean working tree on 2026-08-30.
 
 - `npm ci` — installed 60 packages; audit found 0 vulnerabilities.
-- `npm test` — passed: 4 frontend unit tests, 4 repository/contract scans,
+- `npm test` — passed: 4 frontend unit tests, 5 repository/contract scans,
   19 Rust tests, and all 14 observable product claims.
 - `npx tsc --noEmit`, `cargo fmt --check`, and `cargo clippy --locked
   --all-targets -- -D warnings` — passed.
@@ -75,8 +79,10 @@ deployment build. The Lighthouse CLI is also unavailable locally; no score is
 claimed. The build-size budget, browser performance smoke, and accessibility
 checks above did run locally.
 
-The scoped deployment and final live identity check are recorded after the
-repair commit is pushed.
+An initial scoped rollout exposed the legacy file-lock condition described
+above; no data was changed. The startup-order repair has local regression and
+browser evidence. The final scoped deployment and live identity check are
+recorded after this source commit is pushed.
 
 ## How to run
 

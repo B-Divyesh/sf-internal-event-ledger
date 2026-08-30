@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const dockerfile = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8');
+const serverMain = await readFile(new URL('../src/main.rs', import.meta.url), 'utf8');
 
 test('container build identity defaults safely and never reads git metadata', () => {
   const firstFrom = dockerfile.indexOf('FROM ');
@@ -25,6 +26,15 @@ test('runtime image carries the supplied build identity and starts with defaults
   assert.match(runtime, /^\s*ADMIN_TOKEN_FILE=\/data\/admin-token \\/m);
   assert.match(runtime, /org\.opencontainers\.image\.revision=\$BUILD_SHA/);
   assert.doesNotMatch(runtime, /ADMIN_TOKEN=/);
+});
+
+test('rolling startup binds before it opens the durable SQLite files', () => {
+  const listener = serverMain.indexOf('let listener = TcpListener::bind');
+  const pools = serverMain.indexOf('open_runtime_pools(&database_url).await?');
+  assert.ok(listener >= 0, 'the service must bind its configured PORT');
+  assert.ok(pools >= 0, 'the service must open its SQLite pools');
+  assert.ok(listener < pools, 'a replacement must bind before it contends with an older SQLite writer');
+  assert.match(serverMain, /SQLite is busy during rolling startup; retrying/);
 });
 
 test('site discovery and designed error documents ship in the frontend', async () => {
