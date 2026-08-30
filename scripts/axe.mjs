@@ -32,9 +32,9 @@ for (const viewport of viewports) {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
   await page.goto(url, { waitUntil: 'networkidle' });
-  await scan(page, viewport, 'Administrator access');
+  await scan(page, viewport, 'Public landing');
   await page.getByLabel('Administrator token').fill(adminToken);
-  await page.getByRole('button', { name: 'Unlock ledger' }).click();
+  await page.getByRole('button', { name: 'Open my ledger' }).click();
   await page.getByRole('heading', { name: 'Event ledger' }).waitFor();
 
   for (const view of views) {
@@ -54,6 +54,13 @@ for (const viewport of viewports) {
     }
   }
   await context.close();
+
+  const demoContext = await browser.newContext({ viewport });
+  const demoPage = await demoContext.newPage();
+  await demoPage.goto(`${url}/demo`, { waitUntil: 'networkidle' });
+  await demoPage.getByRole('heading', { name: 'Event ledger' }).waitFor();
+  await scan(demoPage, viewport, 'Demo');
+  await demoContext.close();
 }
 
 await browser.close();

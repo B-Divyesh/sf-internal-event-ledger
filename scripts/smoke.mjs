@@ -14,7 +14,7 @@ page.on('response', (response) => { if (response.status() >= 400) badResponses.p
 
 await page.goto(base, { waitUntil: 'networkidle' });
 await page.getByLabel('Administrator token').fill(adminToken);
-await page.getByRole('button', { name: 'Unlock ledger' }).click();
+await page.getByRole('button', { name: 'Open my ledger' }).click();
 await page.getByRole('heading', { name: 'Event ledger' }).waitFor();
 await page.getByRole('button', { name: 'Sources' }).click();
 const suffix = Date.now().toString().slice(-7);
@@ -62,7 +62,7 @@ if (await checkoutPage.evaluate(() => localStorage.getItem('sb_license:internal-
 await checkoutPage.getByText('A checkout license is ready to apply after administrator access.').waitFor();
 const applyRequest = checkoutPage.waitForRequest((request) => request.url() === `${base}/api/license` && request.method() === 'PUT');
 await checkoutPage.getByLabel('Administrator token').fill(adminToken);
-await checkoutPage.getByRole('button', { name: 'Unlock ledger' }).click();
+await checkoutPage.getByRole('button', { name: 'Open my ledger' }).click();
 const applied = await applyRequest;
 if (JSON.parse(applied.postData() || '{}').license !== 'returned-license-token') throw new Error('Returned checkout license was not applied to the server');
 await checkoutPage.getByRole('button', { name: 'Settings' }).click();

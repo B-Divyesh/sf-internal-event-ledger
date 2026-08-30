@@ -1,0 +1,93 @@
+[
+  {
+    "id": "demo-sandbox",
+    "claim": "Try it with sample data opens an isolated ledger without an administrator token.",
+    "where": "landing primary action, README demo section",
+    "test": "npm run test:claims -- --grep @claim:demo-sandbox",
+    "sandbox": "fresh 390px browser context; enter from the public landing page; assert seeded sources, events, reset, and no token prompt"
+  },
+  {
+    "id": "demo-isolation",
+    "claim": "Demo actions never read or change the operator's ledger.",
+    "where": "demo banner, README demo section",
+    "test": "npm run test:claims -- --grep @claim:demo-isolation",
+    "sandbox": "fresh production database with a sentinel source; use demo without auth; assert only demo API calls and unchanged production events"
+  },
+  {
+    "id": "self-hosted-runtime",
+    "claim": "The product starts as a self-hosted SQLite service with only PORT configured.",
+    "where": "landing facts, README run and privacy sections",
+    "test": "npm run test:claims -- --grep @claim:self-hosted-runtime",
+    "sandbox": "fresh temporary directory; release binary receives only PATH and PORT; assert generated 256-bit token mode, SQLite file, health, and landing response"
+  },
+  {
+    "id": "review-workflow",
+    "claim": "Reviewers can search, acknowledge, archive, and produce a 24-hour digest from grouped events.",
+    "where": "landing preview, README introduction and digest section",
+    "test": "npm run test:claims -- --grep @claim:review-workflow",
+    "sandbox": "fresh demo; search to two groups; acknowledge one; archive another; assert digest occurrence total"
+  },
+  {
+    "id": "administrator-boundary",
+    "claim": "Production management data requires the administrator token, which stays in the browser tab.",
+    "where": "landing access form, privacy page, README",
+    "test": "npm run test:claims -- --grep @claim:administrator-boundary",
+    "sandbox": "fresh server and browser; assert anonymous management routes return 401, valid access works, and the token exists only in sessionStorage"
+  },
+  {
+    "id": "retention-delete",
+    "claim": "Running retention deletes event groups older than each source policy.",
+    "where": "README digest, retention, and export section",
+    "test": "npm run test:claims -- --grep @claim:retention-delete",
+    "sandbox": "fresh database; create and age one fixture event beyond its one-day policy; run retention and assert exactly one deletion"
+  },
+  {
+    "id": "response-policy",
+    "claim": "HTML and the service worker revalidate while hashed assets use immutable caching.",
+    "where": "README privacy and security section",
+    "test": "npm run test:claims -- --grep @claim:response-policy",
+    "sandbox": "fresh server; inspect root, hashed script, service-worker cache headers, and the response CSP"
+  },
+  {
+    "id": "ledger-export",
+    "claim": "Exports the complete sample ledger as CSV and JSON.",
+    "where": "ledger toolbar, README",
+    "test": "npm run test:claims -- --grep @claim:ledger-export",
+    "sandbox": "fresh demo workspace; download both formats; assert CSV header plus one row per sample group and JSON record count"
+  },
+  {
+    "id": "privacy-no-tracking",
+    "claim": "The product loads no analytics, trackers, third-party fonts, or runtime CDN assets.",
+    "where": "landing facts, privacy page, README",
+    "test": "npm run test:claims -- --grep @claim:privacy-no-tracking",
+    "sandbox": "record every browser request through landing, demo, and digest; assert every request is same-origin"
+  },
+  {
+    "id": "offline-demo",
+    "claim": "The sample ledger remains readable offline after its first visit.",
+    "where": "README demo section",
+    "test": "npm run test:claims -- --grep @claim:offline-demo",
+    "sandbox": "fresh browser context; load /demo online; wait for service-worker control; set context offline; reload and assert all five groups"
+  },
+  {
+    "id": "ingest-safety",
+    "claim": "A source can require HMAC-SHA256, redact configured event fields and headers, and group repeated fingerprints.",
+    "where": "README receiver and privacy sections",
+    "test": "npm run test:claims -- --grep @claim:ingest-safety",
+    "sandbox": "fresh database; create one signed source; send two signed fixture events; assert grouped count, redaction, and discarded credentials"
+  },
+  {
+    "id": "plan-limits",
+    "claim": "Free accepts five sources and 30-day retention; a verified Pro license adds sources, 10-year retention, and custom digest windows.",
+    "where": "landing pricing, settings, terms, README",
+    "test": "npm run test:claims -- --grep @claim:plan-limits",
+    "sandbox": "fresh database and recorded local Sociobot verdict; assert free rejection boundaries, apply fixture license, then assert Pro boundaries"
+  },
+  {
+    "id": "api-rate-limit",
+    "claim": "Management and receiver API clients are rate limited and receive Retry-After when limited.",
+    "where": "README security section",
+    "test": "npm run test:claims -- --grep @claim:api-rate-limit",
+    "sandbox": "fresh server; send an authenticated management burst from one forwarded client; assert 429 and Retry-After"
+  }
+]

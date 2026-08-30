@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -24,4 +24,16 @@ test('runtime image carries the supplied build identity and starts with defaults
   assert.match(runtime, /^\s*ADMIN_TOKEN_FILE=\/data\/admin-token \\/m);
   assert.match(runtime, /org\.opencontainers\.image\.revision=\$BUILD_SHA/);
   assert.doesNotMatch(runtime, /ADMIN_TOKEN=/);
+});
+
+test('site discovery and designed error documents ship in the frontend', async () => {
+  for (const name of ['robots.txt', 'sitemap.xml', '404.html', '404.css', 'social-card.webp', 'apple-touch-icon.png']) {
+    await access(new URL(`../frontend/public/${name}`, import.meta.url));
+  }
+  const robots = await readFile(new URL('../frontend/public/robots.txt', import.meta.url), 'utf8');
+  const sitemap = await readFile(new URL('../frontend/public/sitemap.xml', import.meta.url), 'utf8');
+  const notFound = await readFile(new URL('../frontend/public/404.html', import.meta.url), 'utf8');
+  assert.match(robots, /Sitemap: https:\/\/internal-event-ledger\.sociobot\.in\/sitemap\.xml/);
+  for (const route of ['/', '/demo', '/privacy', '/terms']) assert.match(sitemap, new RegExp(`<loc>https://internal-event-ledger\\.sociobot\\.in${route.replace('/', '\\/')}`));
+  assert.match(notFound, /<h1>This route is not on the board<\/h1>/);
 });

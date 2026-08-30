@@ -57,4 +57,4 @@ One generated hero/empty-state illustration depicts a midnight central dispatch 
 
 **Negative list:** illegible pseudo-text, real transport marks, corporate logos, people, alarm imagery, glowing cyberpunk neon, generic SaaS dashboard, glossy 3D, stock-photo lighting.
 
-**Provenance:** generated for this product with the Factory Azure OpenAI image deployment (`factory-image`) on 2026-08-27. The resulting image is original AI-generated artwork; prompt sidecar is stored with the source. Web delivery uses optimized WebP at ≤300 KB with explicit dimensions. Footer disclosure: “Poster artwork generated for Internal Event Ledger.”
+**Provenance:** generated for this product with the Factory Azure OpenAI image deployment (`factory-image`) on 2026-08-27. The resulting image is original AI-generated artwork; prompt sidecar is stored with the source. Web delivery uses optimized WebP at ≤300 KB with explicit dimensions. The 1200×630 social card and 180px touch icon are crops of that same original asset, produced locally on 2026-08-30 without a new model call. Footer disclosure: “Poster artwork generated for Internal Event Ledger.”

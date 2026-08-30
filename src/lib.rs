@@ -3,7 +3,7 @@ use axum::{
     extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{delete, get, patch, post},
     Json, Router,
 };
@@ -114,12 +114,19 @@ pub struct AppState {
     billing_api_base: Arc<str>,
     http: reqwest::Client,
     ingest_limits: Arc<Mutex<HashMap<String, IngestBucket>>>,
+    api_limits: Arc<Mutex<HashMap<String, IngestBucket>>>,
+    demos: Arc<Mutex<HashMap<String, DemoWorkspace>>>,
     trusted_proxy_ips: Arc<HashSet<IpAddr>>,
 }
 
 struct IngestBucket {
     tokens: f64,
     updated_at: Instant,
+}
+
+struct DemoWorkspace {
+    created_at: Instant,
+    payload: Value,
 }
 
 impl AppState {
@@ -130,6 +137,8 @@ impl AppState {
             billing_api_base: Arc::from(billing_api_base.trim_end_matches('/').to_owned()),
             http: reqwest::Client::new(),
             ingest_limits: Arc::new(Mutex::new(HashMap::new())),
+            api_limits: Arc::new(Mutex::new(HashMap::new())),
+            demos: Arc::new(Mutex::new(HashMap::new())),
             trusted_proxy_ips: Arc::new(HashSet::new()),
         }
     }
@@ -151,8 +160,13 @@ pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
 
 pub fn app(state: AppState, static_dir: PathBuf) -> Router {
     let index = static_dir.join("index.html");
-    let ingest_routes = Router::new().route("/ingest/{alias}", post(ingest));
-    let api = Router::new()
+    let ingest_routes = Router::new()
+        .route("/ingest/{alias}", post(ingest))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            limit_ingest_requests,
+        ));
+    let protected_api = Router::new()
         .route("/sources", get(list_sources).post(create_source))
         .route("/sources/{id}", delete(delete_source))
         .route("/events", get(list_events).patch(bulk_update_events))
@@ -166,19 +180,63 @@ pub fn app(state: AppState, static_dir: PathBuf) -> Router {
             get(get_license).put(update_license).delete(remove_license),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
+    let demo_api = Router::new()
+        .route("/demo", post(create_demo))
+        .route("/demo/{id}", get(get_demo).delete(delete_demo));
+    let api = Router::new()
+        .merge(protected_api)
+        .merge(demo_api)
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            limit_api_requests,
+        ));
     Router::new()
         .route("/health", get(health))
         .merge(ingest_routes)
         .nest("/api", api)
+        .route_service("/", ServeFile::new(index.clone()))
+        .route_service("/demo", ServeFile::new(index.clone()))
         .route_service("/privacy", ServeFile::new(index.clone()))
         .route_service("/terms", ServeFile::new(index.clone()))
-        .fallback_service(ServeDir::new(static_dir).not_found_service(ServeFile::new(index)))
+        .route_service("/robots.txt", ServeFile::new(static_dir.join("robots.txt")))
+        .route_service(
+            "/sitemap.xml",
+            ServeFile::new(static_dir.join("sitemap.xml")),
+        )
+        .route_service(
+            "/manifest.webmanifest",
+            ServeFile::new(static_dir.join("manifest.webmanifest")),
+        )
+        .route_service("/sw.js", ServeFile::new(static_dir.join("sw.js")))
+        .route_service(
+            "/favicon.svg",
+            ServeFile::new(static_dir.join("favicon.svg")),
+        )
+        .route_service("/404.css", ServeFile::new(static_dir.join("404.css")))
+        .route_service(
+            "/apple-touch-icon.png",
+            ServeFile::new(static_dir.join("apple-touch-icon.png")),
+        )
+        .route_service(
+            "/social-card.webp",
+            ServeFile::new(static_dir.join("social-card.webp")),
+        )
+        .nest_service("/assets", ServeDir::new(static_dir.join("assets")))
+        .route_service("/404.html", ServeFile::new(static_dir.join("404.html")))
+        .fallback(not_found)
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(256 * 1024))
         .layer(middleware::from_fn(security_headers))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn not_found() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Html(include_str!("../frontend/public/404.html")),
+    )
 }
 
 async fn security_headers(req: Request<Body>, next: Next) -> Response {
@@ -268,6 +326,74 @@ async fn require_admin(
     next.run(request).await
 }
 
+async fn limit_api_requests(
+    State(state): State<AppState>,
+    peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
+    if !take_request_token(&state.api_limits, "api", address, 60.0, 20.0) {
+        return ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "This client is sending API requests too quickly. Try again shortly.".into(),
+        )
+        .into_response();
+    }
+    next.run(request).await
+}
+
+async fn limit_ingest_requests(
+    State(state): State<AppState>,
+    peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
+    if !take_request_token(&state.api_limits, "ingest", address, 240.0, 40.0) {
+        return ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "This client is sending receiver requests too quickly. Try again shortly.".into(),
+        )
+        .into_response();
+    }
+    next.run(request).await
+}
+
+fn take_request_token(
+    limits: &Mutex<HashMap<String, IngestBucket>>,
+    scope: &str,
+    address: Option<IpAddr>,
+    capacity: f64,
+    refill_per_second: f64,
+) -> bool {
+    let key = format!(
+        "{scope}:{}",
+        address
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "direct".into())
+    );
+    let now = Instant::now();
+    let mut limits = limits.lock().expect("request rate-limit lock");
+    if limits.len() > 10_000 {
+        limits.retain(|_, bucket| now.duration_since(bucket.updated_at).as_secs() < 600);
+    }
+    let bucket = limits.entry(key).or_insert(IngestBucket {
+        tokens: capacity,
+        updated_at: now,
+    });
+    let elapsed = now.duration_since(bucket.updated_at).as_secs_f64();
+    bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(capacity);
+    bucket.updated_at = now;
+    if bucket.tokens < 1.0 {
+        return false;
+    }
+    bucket.tokens -= 1.0;
+    true
+}
+
 #[derive(Debug)]
 struct ApiError(StatusCode, String);
 impl IntoResponse for ApiError {
@@ -290,6 +416,80 @@ impl From<sqlx::Error> for ApiError {
             "The ledger database could not complete that request.".into(),
         )
     }
+}
+
+async fn create_demo(
+    State(state): State<AppState>,
+    peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
+    if !take_request_token(&state.api_limits, "demo-create", address, 10.0, 1.0 / 60.0) {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "This client created too many demos. Try again shortly.".into(),
+        ));
+    }
+    let id = Uuid::new_v4().to_string();
+    let payload = demo_payload(&id);
+    let now = Instant::now();
+    let mut demos = state.demos.lock().expect("demo workspace lock");
+    demos.retain(|_, workspace| now.duration_since(workspace.created_at).as_secs() < 86_400);
+    demos.insert(
+        id,
+        DemoWorkspace {
+            created_at: now,
+            payload: payload.clone(),
+        },
+    );
+    Ok(Json(payload))
+}
+
+async fn get_demo(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let now = Instant::now();
+    let mut demos = state.demos.lock().expect("demo workspace lock");
+    demos.retain(|_, workspace| now.duration_since(workspace.created_at).as_secs() < 86_400);
+    demos
+        .get(&id)
+        .map(|workspace| Json(workspace.payload.clone()))
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "This demo expired. Reset the demo to load a fresh sample.".into(),
+            )
+        })
+}
+
+async fn delete_demo(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
+    state.demos.lock().expect("demo workspace lock").remove(&id);
+    StatusCode::NO_CONTENT
+}
+
+fn demo_payload(workspace_id: &str) -> Value {
+    let now = Utc::now();
+    let checkout = format!("demo-{workspace_id}-checkout");
+    let deploys = format!("demo-{workspace_id}-deploys");
+    let imports = format!("demo-{workspace_id}-imports");
+    json!({
+        "workspace_id": workspace_id,
+        "expires_in_seconds": 86_400,
+        "digest_hour": "09:00",
+        "sources": [
+            {"id":checkout,"name":"Checkout API","alias":"checkout-api","redact_headers":"[\"x-customer-email\"]","redact_paths":"[\"customer.email\",\"payment.card\"]","retention_days":30,"created_at":(now-Duration::days(18)).to_rfc3339(),"event_count":2,"unread_count":1},
+            {"id":deploys,"name":"Deploy pipeline","alias":"deploys","redact_headers":"[]","redact_paths":"[\"actor.email\"]","retention_days":30,"created_at":(now-Duration::days(12)).to_rfc3339(),"event_count":1,"unread_count":0},
+            {"id":imports,"name":"Customer imports","alias":"customer-imports","redact_headers":"[]","redact_paths":"[\"customer.email\"]","retention_days":14,"created_at":(now-Duration::days(7)).to_rfc3339(),"event_count":2,"unread_count":2}
+        ],
+        "events": [
+            {"id":format!("demo-{workspace_id}-refund"),"source_id":checkout,"source_name":"Checkout API","source_alias":"checkout-api","fingerprint":"6c2e197ea64342c1","event_type":"refund.requested","summary":"Refund review requested for annual plan","payload_json":"{\"amount\":12900,\"currency\":\"USD\",\"customer\":{\"email\":\"[REDACTED]\"},\"reason\":\"duplicate purchase\"}","headers_json":"{\"content-type\":\"application/json\",\"x-customer-email\":\"[REDACTED]\"}","status":"unread","occurrence_count":3,"received_at":(now-Duration::hours(4)).to_rfc3339(),"last_seen_at":(now-Duration::minutes(18)).to_rfc3339()},
+            {"id":format!("demo-{workspace_id}-latency"),"source_id":checkout,"source_name":"Checkout API","source_alias":"checkout-api","fingerprint":"178e34b390b24908","event_type":"checkout.latency","summary":"Checkout latency crossed 900 ms","payload_json":"{\"p95_ms\":947,\"region\":\"west-europe\"}","headers_json":"{\"content-type\":\"application/json\"}","status":"acknowledged","occurrence_count":5,"received_at":(now-Duration::hours(9)).to_rfc3339(),"last_seen_at":(now-Duration::hours(2)).to_rfc3339()},
+            {"id":format!("demo-{workspace_id}-deploy"),"source_id":deploys,"source_name":"Deploy pipeline","source_alias":"deploys","fingerprint":"52aaab1346814d20","event_type":"deploy.completed","summary":"Production deploy 2026.08.30 completed","payload_json":"{\"version\":\"2026.08.30\",\"duration_seconds\":184,\"actor\":{\"email\":\"[REDACTED]\"}}","headers_json":"{\"content-type\":\"application/json\"}","status":"acknowledged","occurrence_count":1,"received_at":(now-Duration::hours(3)).to_rfc3339(),"last_seen_at":(now-Duration::hours(3)).to_rfc3339()},
+            {"id":format!("demo-{workspace_id}-import"),"source_id":imports,"source_name":"Customer imports","source_alias":"customer-imports","fingerprint":"3cb36f5d7b4a41d8","event_type":"import.delayed","summary":"Catalogue import is waiting for two files","payload_json":"{\"job\":\"catalogue-4182\",\"missing\":[\"prices.csv\",\"variants.csv\"],\"customer\":{\"email\":\"[REDACTED]\"}}","headers_json":"{\"content-type\":\"application/json\"}","status":"unread","occurrence_count":2,"received_at":(now-Duration::minutes(54)).to_rfc3339(),"last_seen_at":(now-Duration::minutes(31)).to_rfc3339()},
+            {"id":format!("demo-{workspace_id}-mapping"),"source_id":imports,"source_name":"Customer imports","source_alias":"customer-imports","fingerprint":"938be27d69944552","event_type":"import.mapping_warning","summary":"Three product rows need category mapping","payload_json":"{\"job\":\"catalogue-4179\",\"row_count\":3,\"categories\":[\"seasonal\",\"gift-card\"]}","headers_json":"{\"content-type\":\"application/json\"}","status":"unread","occurrence_count":1,"received_at":(now-Duration::hours(6)).to_rfc3339(),"last_seen_at":(now-Duration::hours(6)).to_rfc3339()}
+        ]
+    })
 }
 
 #[derive(Serialize, FromRow)]
@@ -596,7 +796,7 @@ fn client_ip(
     headers: &HeaderMap,
 ) -> Option<IpAddr> {
     let peer_ip = peer.map(|peer| peer.0.ip());
-    if peer_ip.is_some_and(|ip| state.trusted_proxy_ips.contains(&ip)) {
+    if peer_ip.is_some_and(|ip| is_trusted_proxy(state, ip)) {
         return headers
             .get("x-forwarded-for")
             .and_then(|value| value.to_str().ok())
@@ -605,6 +805,12 @@ fn client_ip(
             .or(peer_ip);
     }
     peer_ip
+}
+
+fn is_trusted_proxy(state: &AppState, address: IpAddr) -> bool {
+    state.trusted_proxy_ips.contains(&address)
+        || address.is_loopback()
+        || matches!(address, IpAddr::V4(ip) if ip.is_private())
 }
 
 #[derive(Deserialize, Default)]
@@ -1485,7 +1691,131 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forwarded_addresses_are_used_only_for_a_trusted_proxy() {
+    async fn management_rate_limit_wraps_authenticated_and_anonymous_requests() {
+        for authenticated in [true, false] {
+            let (router, path) = new_test_router().await;
+            let mut limited = None;
+            for _ in 0..220 {
+                let request = Request::builder().uri("/api/events");
+                let request = if authenticated {
+                    admin(request)
+                } else {
+                    request
+                };
+                let response = router
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                    limited = Some(response);
+                    break;
+                }
+                assert_eq!(
+                    response.status(),
+                    if authenticated {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::UNAUTHORIZED
+                    }
+                );
+            }
+            let limited = limited.expect("every management client must reach the API limit");
+            assert_eq!(limited.headers()[header::RETRY_AFTER], "1");
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn demo_workspace_is_random_ephemeral_and_never_reads_production_tables() {
+        let (router, path) = new_test_router().await;
+        assert_eq!(
+            create_test_source(&router, "private-production-source", 30)
+                .await
+                .status(),
+            StatusCode::CREATED
+        );
+
+        let first = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/demo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first: Value =
+            serde_json::from_slice(&first.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        let first_id = first["workspace_id"].as_str().unwrap();
+        assert_eq!(first["sources"].as_array().unwrap().len(), 3);
+        assert_eq!(first["events"].as_array().unwrap().len(), 5);
+        assert!(!first.to_string().contains("private-production-source"));
+
+        let second = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/demo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let second: Value =
+            serde_json::from_slice(&second.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_ne!(first_id, second["workspace_id"].as_str().unwrap());
+
+        let removed = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/demo/{first_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+        let missing = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/demo/{first_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn unknown_routes_return_the_designed_404_document() {
+        let (router, path) = new_test_router().await;
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/does-not-exist")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains("This route is not on the board"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn forwarded_addresses_are_used_for_configured_or_private_ingress_only() {
         let pool = SqlitePoolOptions::new()
             .connect_lazy("sqlite::memory:")
             .unwrap();
@@ -1503,9 +1833,13 @@ mod tests {
                 .connect_lazy("sqlite::memory:")
                 .unwrap(),
         );
+        let public_peer = ConnectInfo(std::net::SocketAddr::from((
+            "198.51.100.7".parse::<IpAddr>().unwrap(),
+            8080,
+        )));
         assert_eq!(
-            client_ip(&untrusted, Some(&peer), &headers),
-            Some("127.0.0.1".parse().unwrap())
+            client_ip(&untrusted, Some(&public_peer), &headers),
+            Some("198.51.100.7".parse().unwrap())
         );
     }
 

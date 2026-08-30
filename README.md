@@ -6,6 +6,12 @@ It accepts private JSON endpoints, verifies optional HMAC-SHA256 signatures, app
 
 This is not a pager, retrying webhook proxy, automation engine, or guaranteed-delivery system. Keep urgent alerts in an incident tool.
 
+## Try the isolated demo
+
+Open `/demo` or choose **Try it with sample data** on the first screen. The server creates a random in-memory workspace with three sources and five grouped events. It expires after 24 hours and never reads or writes the operator's SQLite ledger. **Reset demo** starts a clean sample, and **Start for real** discards it before showing administrator access.
+
+The browser keeps the sample in the separate `demo:internal-event-ledger:workspace` namespace, so `/demo` remains readable offline after its first visit. No account or administrator token is needed.
+
 ## Run with Docker
 
 The smallest deployment uses the included Compose file and a persistent SQLite volume. The build identity defaults to `dev` locally, and the service generates a 256-bit administrator token on first boot when one is not supplied:
@@ -15,7 +21,7 @@ docker compose up --build -d
 docker compose exec ledger cat /data/admin-token
 ```
 
-Open `http://localhost:8080`. The container runs as a non-root user and stores its database and generated administrator token under `/data`. Enter the token in the Administrator access screen; it is retained only for that browser tab. Set `ADMIN_TOKEN` to override generation, and set `BUILD_SHA` to stamp a release image.
+Open `http://localhost:8080`. The container runs as a non-root user and stores its database and generated administrator token under `/data`. Enter the token in **Open your ledger**; it is retained only for that browser tab. Set `ADMIN_TOKEN` to override generation, and set `BUILD_SHA` to stamp a release image.
 
 To build and run the image directly:
 
@@ -35,7 +41,7 @@ Requirements: Node 22+, npm 10+, and Rust 1.88+.
 npm install
 npm run dev          # frontend at http://localhost:5173, proxies the API
 npm run dev:server   # backend at http://localhost:8080 (second terminal)
-npm test             # frontend unit tests and Rust unit/integration tests
+npm test             # frontend, Rust, container, and browser claim tests
 npm run build        # exact frontend build command; output is dist/
 cargo build --locked --release
 ```
@@ -58,7 +64,7 @@ Configuration is environment-only:
 | `ADMIN_TOKEN` | generated and persisted | Optional high-entropy override for administrative browser and API access |
 | `ADMIN_TOKEN_FILE` | `.internal-event-ledger-admin-token` natively; `/data/admin-token` in the image | Generated-token location |
 | `BILLING_API_BASE` | Sociobot production API | Server-side Pro license verification endpoint (override for staging) |
-| `TRUSTED_PROXY_IPS` | unset | Comma-separated reverse-proxy IPs whose `X-Forwarded-For` client address may be used for per-receiver ingest limiting |
+| `TRUSTED_PROXY_IPS` | private/loopback ingress peers | Extra comma-separated proxy IPs whose first `X-Forwarded-For` address is used for client rate limiting |
 | `BUILD_SHA` | `dev` | Compile-time `/health` identity; release builds pass the full commit SHA as a build argument |
 
 ## Receive events
@@ -89,7 +95,9 @@ All management APIs, exports, event review, settings, retention, and licensing r
 
 There are no analytics, trackers, third-party fonts, or runtime CDN assets. Operational data stays in the deployment’s SQLite database. A restored license is retained in browser local storage and, when applied, in the server database so the server can perform its daily verification. Read the in-product `/privacy` and `/terms` pages for the full notices.
 
-Back up the `/data` volume and place the service behind HTTPS. The application itself enforces an administrator boundary; a reverse-proxy identity layer can be added as defense in depth. Ingest endpoints have individual high-entropy tokens; HMAC is recommended when the sender supports it. Authenticated deliveries are rate-limited independently by receiver and client address, so unauthenticated traffic cannot spend a receiver's quota. Set `TRUSTED_PROXY_IPS` only for proxies you operate; forwarding headers from every other peer are ignored. Hashed frontend assets are immutable-cached, HTML and `sw.js` revalidate, and a build-versioned worker immediately activates and reloads controlled clients after an update.
+Back up the `/data` volume and place the service behind HTTPS. The application itself enforces an administrator boundary; a reverse-proxy identity layer can be added as defense in depth. Ingest endpoints have individual high-entropy tokens; HMAC is recommended when the sender supports it. Every API client is rate limited before authentication and receives `429` with `Retry-After` when the allowance is spent. Authenticated deliveries also have a separate receiver quota, so unauthenticated traffic cannot spend it. Private and loopback ingress peers use the first forwarded address; public peers must be listed in `TRUSTED_PROXY_IPS`. Hashed frontend assets are immutable-cached, while HTML and `sw.js` revalidate.
+
+The executable claim registry is [.factory/claims.json](.factory/claims.json). Run all claim sandboxes with `npm run test:claims`.
 
 ## License
 
