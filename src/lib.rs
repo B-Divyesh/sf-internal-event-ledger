@@ -115,6 +115,7 @@ pub struct AppState {
     http: reqwest::Client,
     ingest_limits: Arc<Mutex<HashMap<String, IngestBucket>>>,
     trusted_proxy_ips: Arc<HashSet<IpAddr>>,
+    trust_managed_ingress: bool,
 }
 
 struct IngestBucket {
@@ -131,11 +132,17 @@ impl AppState {
             http: reqwest::Client::new(),
             ingest_limits: Arc::new(Mutex::new(HashMap::new())),
             trusted_proxy_ips: Arc::new(HashSet::new()),
+            trust_managed_ingress: false,
         }
     }
 
     pub fn with_trusted_proxy_ips(mut self, trusted_proxy_ips: HashSet<IpAddr>) -> Self {
         self.trusted_proxy_ips = Arc::new(trusted_proxy_ips);
+        self
+    }
+
+    pub fn with_managed_ingress(mut self, enabled: bool) -> Self {
+        self.trust_managed_ingress = enabled;
         self
     }
 }
@@ -834,16 +841,17 @@ fn take_ingest_token(state: &AppState, source_id: &str, peer_ip: Option<std::net
     true
 }
 
-/// `X-Forwarded-For` is trusted only when the TCP peer is explicitly listed
-/// by the operator. Otherwise the direct peer address is used, so callers
-/// cannot choose their own rate-limit key with a forged forwarding header.
+/// `X-Forwarded-For` is trusted only behind the detected managed ingress or
+/// when the TCP peer is explicitly trusted. Otherwise the direct peer address
+/// is used, so callers cannot choose their own rate-limit key with a forged
+/// forwarding header.
 fn client_ip(
     state: &AppState,
     peer: Option<&ConnectInfo<std::net::SocketAddr>>,
     headers: &HeaderMap,
 ) -> Option<IpAddr> {
     let peer_ip = peer.map(|peer| peer.0.ip());
-    if peer_ip.is_some_and(|ip| is_trusted_proxy(state, ip)) {
+    if state.trust_managed_ingress || peer_ip.is_some_and(|ip| is_trusted_proxy(state, ip)) {
         return headers
             .get("x-forwarded-for")
             .and_then(|value| value.to_str().ok())
@@ -1875,7 +1883,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forwarded_addresses_are_used_for_configured_or_private_ingress_only() {
+    async fn forwarded_addresses_are_used_only_for_trusted_ingress() {
         let pool = SqlitePoolOptions::new()
             .connect_lazy("sqlite::memory:")
             .unwrap();
@@ -1900,6 +1908,16 @@ mod tests {
         assert_eq!(
             client_ip(&untrusted, Some(&public_peer), &headers),
             Some("198.51.100.7".parse().unwrap())
+        );
+        let managed = test_state(
+            SqlitePoolOptions::new()
+                .connect_lazy("sqlite::memory:")
+                .unwrap(),
+        )
+        .with_managed_ingress(true);
+        assert_eq!(
+            client_ip(&managed, Some(&public_peer), &headers),
+            Some("203.0.113.10".parse().unwrap())
         );
     }
 

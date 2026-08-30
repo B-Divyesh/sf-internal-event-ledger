@@ -47,14 +47,18 @@ async fn main() -> anyhow::Result<()> {
         .filter_map(|value| value.parse().ok())
         .collect();
     let trusted_proxy_count = trusted_proxy_ips.len();
+    let managed_ingress =
+        env::var("CONTAINER_APP_NAME").is_ok() && env::var("CONTAINER_APP_REVISION").is_ok();
     let state = AppState::new(pool, admin_token, billing_api_base)
-        .with_trusted_proxy_ips(trusted_proxy_ips);
+        .with_trusted_proxy_ips(trusted_proxy_ips)
+        .with_managed_ingress(managed_ingress);
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
     info!(
         port,
         admin_token_source = %admin_token_source,
         admin_token_file = %admin_token_path.display(),
         trusted_proxy_count,
+        managed_ingress,
         "ledger ready"
     );
     axum::serve(
