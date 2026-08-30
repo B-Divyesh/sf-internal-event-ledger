@@ -26,6 +26,9 @@ that the controller flagged. Runtime state is SQLite only, persisted under
   temporarily busy, a startup router returns an honest `503` with
   `Retry-After` and retries without retaining a failed connection. It switches
   to the real ledger as soon as the durable file is available.
+- Recover a narrowly defined interrupted first-boot artifact: only a
+  zero-byte SQLite file's sibling rollback journal is removed before opening
+  the database. A non-empty ledger is never altered by this recovery path.
 - Added `scripts/forbidden-resource.test.mjs` and `npm run
   test:forbidden-resources`. It recursively checks repository source,
   configuration, documentation, and test files for prohibited service,
@@ -47,7 +50,7 @@ All checks below ran from this clean working tree on 2026-08-30.
 
 - `npm ci` — installed 60 packages; audit found 0 vulnerabilities.
 - `npm test` — passed: 4 frontend unit tests, 5 repository/contract scans,
-  20 Rust tests, and all 14 observable product claims.
+  21 Rust tests, and all 14 observable product claims.
 - `npx tsc --noEmit`, `cargo fmt --check`, and `cargo clippy --locked
   --all-targets -- -D warnings` — passed.
 - `VITE_BUILD_SHA=repair-7-local npm run build` — passed. The built initial

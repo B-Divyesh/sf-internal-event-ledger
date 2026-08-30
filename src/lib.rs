@@ -197,6 +197,7 @@ pub async fn create_rate_limit_pool(ledger_url: &str) -> anyhow::Result<SqlitePo
 }
 
 async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
+    clear_empty_database_journal(url)?;
     let pool = SqlitePoolOptions::new()
         .max_connections(8)
         .after_connect(|connection, _| {
@@ -212,6 +213,23 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
     Ok(pool)
 }
 
+fn clear_empty_database_journal(url: &str) -> anyhow::Result<()> {
+    let Some(database_path) = sqlite_file_path(url) else {
+        return Ok(());
+    };
+    let is_empty = fs::metadata(&database_path)
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(false);
+    if !is_empty {
+        return Ok(());
+    }
+    let journal_path = PathBuf::from(format!("{}-journal", database_path.display()));
+    if journal_path.is_file() {
+        fs::remove_file(journal_path)?;
+    }
+    Ok(())
+}
+
 async fn table_exists(pool: &SqlitePool, table: &str) -> anyhow::Result<bool> {
     Ok(sqlx::query_scalar::<_, i64>(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
@@ -223,12 +241,7 @@ async fn table_exists(pool: &SqlitePool, table: &str) -> anyhow::Result<bool> {
 }
 
 fn rate_limit_database_url(ledger_url: &str) -> String {
-    let ledger_path = ledger_url
-        .split_once('?')
-        .map(|(path, _)| path)
-        .unwrap_or(ledger_url)
-        .strip_prefix("sqlite://")
-        .map(FilePath::new);
+    let ledger_path = sqlite_file_path(ledger_url);
     let Some(ledger_path) = ledger_path else {
         return "sqlite://ledger-rate-limits.db?mode=rwc".into();
     };
@@ -239,6 +252,18 @@ fn rate_limit_database_url(ledger_url: &str) -> String {
         .unwrap_or("ledger");
     let sidecar = ledger_path.with_file_name(format!("{stem}-rate-limits.db"));
     format!("sqlite://{}?mode=rwc", sidecar.display())
+}
+
+fn sqlite_file_path(url: &str) -> Option<PathBuf> {
+    let path = url
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or(url)
+        .strip_prefix("sqlite://")?;
+    if path == ":memory:" || path.is_empty() {
+        return None;
+    }
+    Some(FilePath::new(path).to_path_buf())
 }
 
 pub fn app(state: AppState, static_dir: PathBuf) -> Router {
@@ -1392,6 +1417,29 @@ mod tests {
                 .expect("a failed pool must not retain its own SQLite lock")
                 .unwrap();
         reopened.close().await;
+
+        let rate_limit_url = rate_limit_database_url(&url);
+        let rate_limit_path = rate_limit_url
+            .trim_start_matches("sqlite://")
+            .split('?')
+            .next()
+            .unwrap();
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(rate_limit_path);
+    }
+
+    #[tokio::test]
+    async fn zero_byte_ledger_recovers_only_its_orphaned_journal() {
+        let path = std::env::temp_dir().join(format!("ledger-recover-{}.db", Uuid::new_v4()));
+        let journal_path = PathBuf::from(format!("{}-journal", path.display()));
+        std::fs::write(&path, []).unwrap();
+        std::fs::write(&journal_path, [0_u8; 512]).unwrap();
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+
+        let pool = create_pool(&url).await.unwrap();
+        assert!(!journal_path.exists());
+        assert!(table_exists(&pool, "sources").await.unwrap());
+        pool.close().await;
 
         let rate_limit_url = rate_limit_database_url(&url);
         let rate_limit_path = rate_limit_url
