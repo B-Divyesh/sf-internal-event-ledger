@@ -152,7 +152,7 @@ async fn open_runtime_pools(
         if !is_database_locked(&error) {
             return Err(error);
         }
-        warn!(attempt, "SQLite is busy during rolling startup; retrying");
+        warn!(attempt, error = %error, "SQLite is busy during rolling startup; retrying");
         sleep(Duration::from_secs(2)).await;
     }
 }
