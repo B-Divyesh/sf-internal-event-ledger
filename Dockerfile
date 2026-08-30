@@ -29,7 +29,7 @@ COPY --from=server-builder /build/target/release/internal-event-ledger /usr/loca
 COPY --from=web-builder /build/dist ./dist
 ENV PORT=8080 \
     BUILD_SHA=$BUILD_SHA \
-    DATABASE_URL="sqlite:///data/ledger.db?mode=rwc" \
+    DATABASE_URL="sqlite:///data/ledger-live.db?mode=rwc" \
     ADMIN_TOKEN_FILE=/data/admin-token \
     STATIC_DIR=/app/dist \
     RUST_LOG=internal_event_ledger=info,tower_http=info

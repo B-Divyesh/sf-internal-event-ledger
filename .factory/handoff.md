@@ -30,6 +30,10 @@ that the controller flagged. Runtime state is SQLite only, persisted under
   zero-byte SQLite placeholder and its sibling rollback journal are removed
   before opening the database. A non-empty ledger is never altered by this
   recovery path.
+- The deployed target's original default filename was verified zero bytes with
+  no event data, so the container now initializes its durable SQLite ledger at
+  a fresh sibling filename under the same `/data` mount. The stale placeholder
+  is left untouched by the deployment itself.
 - Added `scripts/forbidden-resource.test.mjs` and `npm run
   test:forbidden-resources`. It recursively checks repository source,
   configuration, documentation, and test files for prohibited service,
