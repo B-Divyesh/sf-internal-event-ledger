@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow},
     FromRow, Row, SqlitePool,
 };
 use std::{
@@ -199,7 +199,9 @@ pub async fn create_rate_limit_pool(ledger_url: &str) -> anyhow::Result<SqlitePo
 
 async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
     clear_empty_database_journal(url)?;
-    let options = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
+    let options = SqliteConnectOptions::from_str(url)?
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Memory);
     let pool = SqlitePoolOptions::new()
         // The deployment is intentionally a single SQLite writer. One
         // connection prevents first-boot schema work from contending with an
