@@ -67,7 +67,7 @@ async function waitForExit(process, timeoutMs) {
 test('locked legacy file remains untouched; fresh database starts and a locked startup exits', async () => {
   const workDir = await mkdtemp(join(tmpdir(), 'ledger-startup-storage-'));
   const legacyPath = join(workDir, 'ledger-current.db');
-  const safePath = join(workDir, 'internal-event-ledger-r9', 'ledger.db');
+  const safePath = join(workDir, 'internal-event-ledger-r10', 'ledger.db');
   const legacy = new DatabaseSync(legacyPath);
   let healthy;
   let restarted;

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow},
+    sqlite::{SqliteConnectOptions, SqliteLockingMode, SqlitePoolOptions, SqliteRow},
     FromRow, Row, SqlitePool,
 };
 use std::{
@@ -43,7 +43,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// this revision away from a file which an earlier revision may still have
 /// locked on the durable share.  The application never deletes or renames
 /// that older file.
-pub const STORAGE_SUBDIRECTORY: &str = "internal-event-ledger-r9";
+pub const STORAGE_SUBDIRECTORY: &str = "internal-event-ledger-r10";
 pub const DATABASE_FILE_NAME: &str = "ledger.db";
 pub const STARTUP_MAX_ATTEMPTS: usize = 3;
 pub const STARTUP_RETRY_DELAY: StdDuration = StdDuration::from_secs(1);
@@ -208,7 +208,11 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
     let options = SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
         .foreign_keys(true)
-        .busy_timeout(StdDuration::from_secs(1));
+        .busy_timeout(StdDuration::from_secs(1))
+        // There is exactly one process and one pool connection for this
+        // mounted database. Retain its exclusive file lock instead of
+        // renegotiating shared SQLite locks on Azure Files per statement.
+        .locking_mode(SqliteLockingMode::Exclusive);
     let pool = SqlitePoolOptions::new()
         // The mounted volume has one replica and this pool has exactly one
         // connection.  All ledger, demo, and rate-limit writes serialize on
@@ -1988,7 +1992,8 @@ mod tests {
     async fn cache_policy_marks_hashed_assets_immutable_and_shell_revalidates() {
         assert!(is_hashed_asset("/assets/index-Abc12345.js"));
         assert!(!is_hashed_asset("/assets/dispatch-hall.webp"));
-        let (_router, database_path) = new_test_router().await;
+        let database_path =
+            std::env::temp_dir().join(format!("ledger-static-{}.db", Uuid::new_v4()));
         let cache_path = std::env::temp_dir().join(format!("ledger-static-{}", Uuid::new_v4()));
         std::fs::create_dir_all(cache_path.join("assets")).unwrap();
         std::fs::write(

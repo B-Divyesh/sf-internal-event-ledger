@@ -17,15 +17,15 @@ The process remained live, proving the reported unbounded background retry / per
 
 ## Repair
 
-- The image now uses `/data/internal-event-ledger-r9/ledger.db` and stores its generated administrator token beside it at `/data/internal-event-ledger-r9/admin-token`. This is a second fresh directory on the same durable `deploy.data_dir=/data` mount. The application has no code path that deletes, renames, or opens earlier locked files.
-- SQLite uses the rollback `DELETE` journal, foreign keys, a one-second busy timeout, and one `SqlitePool` connection. It verifies the default `DELETE` journal mode without attempting a journal-mode write during every Azure Files connection. Ledger writes, demo workspaces, and every rate-limit bucket share that one durable database; the rate-limit sidecar and in-memory authenticated-receiver limiter were removed.
+- The image now uses `/data/internal-event-ledger-r10/ledger.db` and stores its generated administrator token beside it at `/data/internal-event-ledger-r10/admin-token`. This is a third fresh directory on the same durable `deploy.data_dir=/data` mount. The application has no code path that deletes, renames, or opens earlier locked files.
+- SQLite uses the rollback `DELETE` journal, foreign keys, a one-second busy timeout, one `SqlitePool` connection, and exclusive SQLite locking. It verifies the default `DELETE` journal mode without attempting a journal-mode write during every Azure Files connection. Ledger writes, demo workspaces, and every rate-limit bucket share that one durable database; the rate-limit sidecar and in-memory authenticated-receiver limiter were removed.
 - Startup makes at most three attempts one second apart when SQLite reports a lock. It binds the requested port first, then either becomes ready or exits with a structured error for the platform to restart; it no longer serves an unready 503 indefinitely.
 - The Compose declaration and the factory container deployment both use one replica for the mounted SQLite volume.
 - `/health` continues to report the exact compile-time `BUILD_SHA`; the Docker image receives that SHA from the factory build argument and carries it as the OCI revision label.
 
 ## Focused regression coverage
 
-- Rust tests lock a legacy `ledger-current.db`, prove the new `internal-event-ledger-r9/ledger.db` starts immediately, verify `PRAGMA journal_mode = delete`, prove the legacy file is unchanged, verify bounded retry releases its failed connection, and verify a source survives a close/reopen with pool size one.
+- Rust tests lock a legacy `ledger-current.db`, prove the new `internal-event-ledger-r10/ledger.db` starts immediately, verify `PRAGMA journal_mode = delete`, prove the legacy file is unchanged, verify bounded retry releases its failed connection, and verify a source survives a close/reopen with pool size one.
 - `scripts/startup-storage.test.mjs` launches the real binary. It holds an exclusive legacy lock while the fresh path serves `/health`, then locks the fresh path and verifies the process exits within six seconds rather than becoming a 503 service. The measured run completed in 5.23 seconds.
 
 ## Verification

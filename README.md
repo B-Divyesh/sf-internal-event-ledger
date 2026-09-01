@@ -18,17 +18,17 @@ The smallest deployment uses the included Compose file and a persistent SQLite v
 
 ```sh
 docker compose up --build -d
-docker compose exec ledger cat /data/internal-event-ledger-r9/admin-token
+docker compose exec ledger cat /data/internal-event-ledger-r10/admin-token
 ```
 
-Open `http://localhost:8080`. The container runs as a non-root user and stores its ledger database, rate-limit state, and generated administrator token in `/data/internal-event-ledger-r9/`. This repaired directory is intentionally separate from earlier locked filenames; the application never deletes or renames them. The mounted deployment runs one replica with one SQLite connection and SQLite's rollback `DELETE` journal. Enter the token in **Open your ledger**; it is retained only for that browser tab. Set `ADMIN_TOKEN` to override generation, and set `BUILD_SHA` to stamp a release image.
+Open `http://localhost:8080`. The container runs as a non-root user and stores its ledger database, rate-limit state, and generated administrator token in `/data/internal-event-ledger-r10/`. This repaired directory is intentionally separate from earlier locked filenames; the application never deletes or renames them. The mounted deployment runs one replica with one SQLite connection, an exclusive SQLite file lock, and SQLite's rollback `DELETE` journal. Enter the token in **Open your ledger**; it is retained only for that browser tab. Set `ADMIN_TOKEN` to override generation, and set `BUILD_SHA` to stamp a release image.
 
 To build and run the image directly:
 
 ```sh
 docker build -t internal-event-ledger .
 docker run --name internal-event-ledger -e PORT=8080 -p 8080:8080 -v ledger-data:/data internal-event-ledger
-docker exec internal-event-ledger cat /data/internal-event-ledger-r9/admin-token
+docker exec internal-event-ledger cat /data/internal-event-ledger-r10/admin-token
 ```
 
 Release builds should pass the full source identity without relying on `.git`: `docker build --build-arg BUILD_SHA=<full-commit-sha> ...`.
@@ -58,11 +58,11 @@ Configuration is environment-only:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port |
-| `DATABASE_URL` | `/data/internal-event-ledger-r9/ledger.db` in the image | Ledger SQLite location; rate-limit state shares this one database connection |
+| `DATABASE_URL` | `/data/internal-event-ledger-r10/ledger.db` in the image | Ledger SQLite location; rate-limit state shares this one database connection |
 | `STATIC_DIR` | `dist` | Built frontend location |
 | `RUST_LOG` | JSON info logs | Tracing filter |
 | `ADMIN_TOKEN` | generated and persisted | Optional high-entropy override for administrative browser and API access |
-| `ADMIN_TOKEN_FILE` | `.internal-event-ledger-data/admin-token` natively; `/data/internal-event-ledger-r9/admin-token` in the image | Generated-token location |
+| `ADMIN_TOKEN_FILE` | `.internal-event-ledger-data/admin-token` natively; `/data/internal-event-ledger-r10/admin-token` in the image | Generated-token location |
 | `TRUSTED_PROXY_IPS` | private/loopback ingress peers | Extra comma-separated proxy IPs whose first `X-Forwarded-For` address is used for client rate limiting |
 | `BUILD_SHA` | `dev` | Compile-time `/health` identity; release builds pass the full commit SHA as a build argument |
 
@@ -92,7 +92,7 @@ All management APIs, exports, event review, settings, and retention require `Aut
 
 ## Privacy and security
 
-There are no analytics, trackers, third-party fonts, runtime CDN assets, billing calls, or identity calls. Operational data stays in the deployment’s SQLite files under `/data/internal-event-ledger-r9/`. Read the in-product `/privacy` and `/terms` pages for the full notices.
+There are no analytics, trackers, third-party fonts, runtime CDN assets, billing calls, or identity calls. Operational data stays in the deployment’s SQLite files under `/data/internal-event-ledger-r10/`. Read the in-product `/privacy` and `/terms` pages for the full notices.
 
 Back up the `/data` volume and place the service behind HTTPS. The application itself enforces an administrator boundary; a reverse-proxy identity layer can be added as defense in depth. Ingest endpoints have individual high-entropy tokens; HMAC is recommended when the sender supports it. Every API client is rate limited before authentication and receives `429` with `Retry-After` when the allowance is spent. Authenticated deliveries also have a separate receiver quota, so unauthenticated traffic cannot spend it. Private and loopback ingress peers use the first forwarded address; public peers must be listed in `TRUSTED_PROXY_IPS`. Hashed frontend assets are immutable-cached, while HTML and `sw.js` revalidate.
 

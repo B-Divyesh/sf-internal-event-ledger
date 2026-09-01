@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import test, { after } from 'node:test';
 import { chromium } from 'playwright';
 
@@ -25,28 +26,43 @@ async function freePort() {
 
 const port = await freePort();
 const base = `http://127.0.0.1:${port}`;
-const server = spawn(join(process.cwd(), 'target/debug/internal-event-ledger'), [], {
-  cwd: process.cwd(),
-  env: {
-    ...process.env,
-    PORT: String(port),
-    DATABASE_URL: `sqlite://${join(workDir, 'claims.db')}?mode=rwc`,
-    STATIC_DIR: join(process.cwd(), 'dist'),
-    ADMIN_TOKEN: adminToken,
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
 let serverOutput = '';
-server.stdout.on('data', (chunk) => { serverOutput += chunk; });
-server.stderr.on('data', (chunk) => { serverOutput += chunk; });
-for (let attempt = 0; attempt < 100; attempt += 1) {
-  if (server.exitCode !== null) throw new Error(`claim server exited early\n${serverOutput}`);
-  try {
-    if ((await fetch(`${base}/health`)).ok) break;
-  } catch {}
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  if (attempt === 99) throw new Error(`claim server did not start\n${serverOutput}`);
+function startServer() {
+  const child = spawn(join(process.cwd(), 'target/debug/internal-event-ledger'), [], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DATABASE_URL: `sqlite://${join(workDir, 'claims.db')}?mode=rwc`,
+      STATIC_DIR: join(process.cwd(), 'dist'),
+      ADMIN_TOKEN: adminToken,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout.on('data', (chunk) => { serverOutput += chunk; });
+  child.stderr.on('data', (chunk) => { serverOutput += chunk; });
+  return child;
 }
+
+let server = startServer();
+async function waitForServer() {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (server.exitCode !== null) throw new Error(`claim server exited early\n${serverOutput}`);
+    try {
+      if ((await fetch(`${base}/health`)).ok) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`claim server did not start\n${serverOutput}`);
+}
+async function restartServer(updateDatabase) {
+  server.kill('SIGTERM');
+  if (server.exitCode === null) await new Promise((resolve) => server.once('exit', resolve));
+  updateDatabase();
+  server = startServer();
+  await waitForServer();
+}
+await waitForServer();
 
 const executablePath = process.env.CHROMIUM_PATH;
 const browser = await chromium.launch(executablePath ? { executablePath } : {});
@@ -96,11 +112,12 @@ claim('demo-expiry', async () => {
   const workspace = await created.json();
   assert.equal(workspace.expires_in_seconds, 86_400);
 
-  const { DatabaseSync } = await import('node:sqlite');
-  const database = new DatabaseSync(join(workDir, 'claims.db'));
-  database.prepare('UPDATE demo_workspaces SET created_at_unix = ? WHERE workspace_id = ?')
-    .run(Math.floor(Date.now() / 1000) - 86_400, workspace.workspace_id);
-  database.close();
+  await restartServer(() => {
+    const database = new DatabaseSync(join(workDir, 'claims.db'));
+    database.prepare('UPDATE demo_workspaces SET created_at_unix = ? WHERE workspace_id = ?')
+      .run(Math.floor(Date.now() / 1000) - 86_400, workspace.workspace_id);
+    database.close();
+  });
 
   const expired = await fetch(`${base}/api/demo/${workspace.workspace_id}`, {
     headers: { 'x-forwarded-for': '203.0.113.73' },
@@ -191,10 +208,11 @@ claim('retention-delete', async () => {
   const created = await createSource('expired-event-source', { retention_days: 1 });
   assert.equal(created.response.status, 201);
   assert.equal((await fetch(`${base}/ingest/expired-event-source`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ledger-token': created.body.token }, body: JSON.stringify({ type: 'old.event', summary: 'Expired fixture event' }) })).status, 202);
-  const { DatabaseSync } = await import('node:sqlite');
-  const database = new DatabaseSync(join(workDir, 'claims.db'));
-  database.exec("PRAGMA busy_timeout=5000; UPDATE events SET last_seen_at='2020-01-01T00:00:00Z' WHERE summary='Expired fixture event'");
-  database.close();
+  await restartServer(() => {
+    const database = new DatabaseSync(join(workDir, 'claims.db'));
+    database.exec("UPDATE events SET last_seen_at='2020-01-01T00:00:00Z' WHERE summary='Expired fixture event'");
+    database.close();
+  });
   const retention = await fetch(`${base}/api/maintenance/retention`, { method: 'POST', headers: auth, body: '{}' });
   assert.equal(retention.status, 200);
   assert.equal((await retention.json()).deleted, 1);
