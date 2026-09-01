@@ -53,7 +53,7 @@ Offline reload, service-worker update, same-origin privacy capture, response pol
 
 ## Container and deployment
 
-The controller already proved the scoped image builds. This worker has no Docker, Podman, Buildah, or Nerdctl executable, so the repository Docker contract and both real build stages were run locally; the final image is built by the factory ACR helper from the committed tree.
+This worker has no Docker, Podman, Buildah, or Nerdctl executable, so the repository Docker contract and both real build stages were run locally; the factory ACR helper built the committed container.
 
 Deployment uses only the work-order configuration:
 
@@ -61,7 +61,17 @@ Deployment uses only the work-order configuration:
 WO_DATA_DIR=/data /opt/fleet/lib/deploy-container.sh internal-event-ledger /work/repo Dockerfile 8080
 ```
 
-Acceptance requires the scoped `sf-internal-event-ledger` revision to stay running, the public `/health` build to equal the deployed Git commit, the public shell/demo to return 200, and state to survive a revision restart. No other app, database, vault, storage share, or secret is read or changed.
+Live repair evidence from 2026-09-01 UTC:
+
+- ACR run `ch1r5` deployed commit `b5c2745a77edc655de7c337a37e7a8f1af96d354` as revision `sf-internal-event-ledger--0000042`. The revision reached `Healthy` / `RunningAtMaxScale` with one configured replica, and public `/health` returned that exact 40-character build SHA.
+- A live `POST /api/demo` wrote workspace `970ffa5d-585d-4932-ba04-57da3d433c67`; its subsequent read returned 3 sources and 5 events. A scoped revision restart briefly showed two replicas, then drained to the new replica `sf-internal-event-ledger--0000042-f677945d9-dm6f9`. The same workspace and all 3 sources / 5 events remained readable afterward, proving restart persistence and rolling overlap.
+- The deployed startup log reports `ledger ready`, `managed_ingress=true`, one SQLite connection, the `/data/internal-event-ledger/ledger-v2.sqlite3` path, and a persisted administrator token without printing the token.
+- `/`, `/demo`, `/privacy`, `/terms`, `/robots.txt`, and `/sitemap.xml` returned 200; the designed missing route returned 404. `verify-url.sh` reported the correct title, `lang=en`, one H1, a main landmark, complete image/button labels, and zero console errors.
+- Live Playwright covered 1366×900 and 390×844. Eight Axe scans found zero violations. Skip-link and route focus, browser Back focus, same-origin-only requests, service-worker update, and offline demo reload passed with zero console errors.
+- A live 100-request management burst returned 61×401 and 39×429; every 429 included `Retry-After: 1`. A concurrent 100-request `/health` smoke returned 100×200 in 114 ms.
+- Response policy passed live: shell and service worker revalidate, hashed assets are immutable, API responses are `no-store`, and CSP, HSTS, no-sniff, frame denial, no-referrer, and permissions policy headers are present.
+
+No other app, database, vault, storage share, or secret was read or changed.
 
 ## Known gaps
 
