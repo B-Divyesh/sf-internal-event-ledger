@@ -20,7 +20,7 @@ The first process still returned `200 {"build":"dev","status":"ok"}`. This isola
 ## Repair
 
 - SQLite now uses normal statement-scoped locks, one pool connection, a one-second busy timeout, foreign keys, and the rollback `DELETE` journal. A running revision and its replacement can briefly share the same durable database. The application no longer holds an exclusive lifetime lease.
-- The durable location stays `/data/internal-event-ledger-r10/ledger.db`; the generated administrator token stays beside it. This repair does not create another database, delete a journal, rename state, or touch an earlier ledger.
+- The first scoped rollout proved `/data/internal-event-ledger-r10/ledger.db` retained the failed candidate's stale exclusive lease even after the code stopped requesting exclusive locks. The final runtime therefore moves once to the stable, previously unused `/data/internal-event-ledger/ledger.db`; its generated administrator token stays beside it. Future revisions and restarts reuse this path. The repair does not delete, rename, or open any earlier ledger.
 - Startup logs the non-secret resolved port, SQLite path, static path, and token-file path before opening storage. All fatal paths now emit a structured error chain plus a plain stderr fallback with the failing stage and path. Invalid `PORT` values also fail with a specific message instead of silently selecting another port.
 - The rolling-start regression launches two real server processes on the same database, proves both `/health` endpoints are live, proves the old process remains live, verifies their deployment-wide limiter shares one 60-token allowance, stops both, starts a third process, and proves the source and administrator token persisted.
 - A second regression supplies an unusable database path and asserts the process exits nonzero while naming both the SQLite initialization stage and exact path.
@@ -66,7 +66,7 @@ Acceptance requires the scoped `sf-internal-event-ledger` revision to stay runni
 ## Known gaps
 
 - No local container engine was available. The factory ACR build and scoped live revision provide the container execution proof.
-- Earlier abandoned database directories are deliberately untouched. This repair preserves and reuses `internal-event-ledger-r10`; any separate historical-data recovery needs explicit operator authorization.
+- Earlier abandoned database directories, including the locked `internal-event-ledger-r10`, are deliberately untouched. Any separate historical-data recovery needs explicit operator authorization.
 
 ## Run locally
 

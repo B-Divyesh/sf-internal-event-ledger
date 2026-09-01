@@ -39,11 +39,10 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// A new directory is deliberately used for the repaired ledger.  It keeps
-/// this revision away from a file which an earlier revision may still have
-/// locked on the durable share.  The application never deletes or renames
-/// that older file.
-pub const STORAGE_SUBDIRECTORY: &str = "internal-event-ledger-r10";
+/// This stable directory replaces the numbered repair paths. It is unused by
+/// the failed exclusive-lock revisions, and every later restart reuses it.
+/// The application never deletes or renames an earlier database.
+pub const STORAGE_SUBDIRECTORY: &str = "internal-event-ledger";
 pub const DATABASE_FILE_NAME: &str = "ledger.db";
 pub const STARTUP_MAX_ATTEMPTS: usize = 3;
 pub const STARTUP_RETRY_DELAY: StdDuration = StdDuration::from_secs(1);

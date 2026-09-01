@@ -23,8 +23,8 @@ test('runtime image carries the supplied build identity and starts with defaults
   assert.match(runtime, /^ARG BUILD_SHA$/m);
   assert.match(runtime, /^\s*BUILD_SHA=\$BUILD_SHA \\/m);
   assert.match(runtime, /^ENV PORT=8080 \\/m);
-  assert.match(runtime, /^\s*DATABASE_URL="sqlite:\/\/\/data\/internal-event-ledger-r10\/ledger\.db\?mode=rwc" \\/m);
-  assert.match(runtime, /^\s*ADMIN_TOKEN_FILE=\/data\/internal-event-ledger-r10\/admin-token \\/m);
+  assert.match(runtime, /^\s*DATABASE_URL="sqlite:\/\/\/data\/internal-event-ledger\/ledger\.db\?mode=rwc" \\/m);
+  assert.match(runtime, /^\s*ADMIN_TOKEN_FILE=\/data\/internal-event-ledger\/admin-token \\/m);
   assert.match(runtime, /org\.opencontainers\.image\.revision=\$BUILD_SHA/);
   assert.doesNotMatch(runtime, /ADMIN_TOKEN=/);
 });
@@ -37,12 +37,12 @@ test('startup uses a fresh data directory, one connection, DELETE journals, and 
   assert.ok(listener < pool, 'a replacement must bind before it opens SQLite');
   assert.match(serverMain, /exiting instead of serving an unready response/);
   assert.match(serverMain, /STARTUP_MAX_ATTEMPTS/);
-  assert.match(dockerfile, /internal-event-ledger-r10\/ledger\.db/);
+  assert.match(dockerfile, /internal-event-ledger\/ledger\.db/);
 });
 
 test('the SQLite policy is one connection with a rollback DELETE journal and rolling-safe locks', async () => {
   const library = await readFile(new URL('../src/lib.rs', import.meta.url), 'utf8');
-  assert.match(library, /STORAGE_SUBDIRECTORY: &str = "internal-event-ledger-r10"/);
+  assert.match(library, /STORAGE_SUBDIRECTORY: &str = "internal-event-ledger"/);
   assert.match(library, /SQLite rollback DELETE journal is required/);
   assert.match(library, /PRAGMA journal_mode/);
   assert.match(library, /\.max_connections\(1\)/);
