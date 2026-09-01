@@ -1,33 +1,15 @@
-use axum::{
-    body::Body,
-    extract::State,
-    http::{header, HeaderValue, Request, StatusCode},
-    response::{IntoResponse, Response},
-    routing::any,
-    Router,
-};
 use internal_event_ledger::{
-    app, create_pool, create_rate_limit_pool, load_or_create_admin_token, AppState,
+    app, default_admin_token_path, default_database_url, load_or_create_admin_token,
+    open_runtime_pool_with_retry, AppState, STARTUP_MAX_ATTEMPTS, STARTUP_RETRY_DELAY,
 };
 use std::{
     collections::HashSet,
     env,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
-    sync::Arc,
 };
-use tokio::{
-    net::TcpListener,
-    sync::RwLock,
-    time::{sleep, Duration},
-};
-use tower::ServiceExt;
-use tracing::{error, info, warn};
-
-#[derive(Clone, Default)]
-struct Runtime {
-    app: Arc<RwLock<Option<Router>>>,
-}
+use tokio::net::TcpListener;
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,21 +21,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let database_url =
-        env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://ledger.db?mode=rwc".into());
+    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| default_database_url());
     let static_dir = PathBuf::from(env::var("STATIC_DIR").unwrap_or_else(|_| "dist".into()));
     let port = env::var("PORT")
         .ok()
-        .and_then(|v| v.parse().ok())
+        .and_then(|value| value.parse().ok())
         .unwrap_or(8080);
-    // Bind before opening SQLite. Container Apps uses a TCP startup probe by
-    // default, so this lets a rolling replacement become runnable and allows
-    // the prior single-writer revision to release the durable /data file.
-    let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
-    let admin_token_path = PathBuf::from(
-        env::var("ADMIN_TOKEN_FILE")
-            .unwrap_or_else(|_| ".internal-event-ledger-admin-token".into()),
-    );
+    let admin_token_path = env::var("ADMIN_TOKEN_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| default_admin_token_path());
     let (admin_token, admin_token_source) =
         load_or_create_admin_token(env::var("ADMIN_TOKEN").ok(), &admin_token_path)?;
     let trusted_proxy_ips: HashSet<IpAddr> = env::var("TRUSTED_PROXY_IPS")
@@ -71,96 +47,51 @@ async fn main() -> anyhow::Result<()> {
     let trusted_proxy_count = trusted_proxy_ips.len();
     let managed_ingress =
         env::var("CONTAINER_APP_NAME").is_ok() && env::var("CONTAINER_APP_REVISION").is_ok();
-    let runtime = Runtime::default();
-    let initializing_runtime = runtime.clone();
-    tokio::spawn(async move {
-        match open_runtime_pools(&database_url).await {
-            Ok((pool, rate_limit_pool)) => {
-                let state = AppState::new(pool, admin_token)
-                    .with_rate_limit_pool(rate_limit_pool)
-                    .with_trusted_proxy_ips(trusted_proxy_ips)
-                    .with_managed_ingress(managed_ingress);
-                *initializing_runtime.app.write().await = Some(app(state, static_dir));
-                info!(
-                    admin_token_source = %admin_token_source,
-                    admin_token_file = %admin_token_path.display(),
-                    trusted_proxy_count,
-                    managed_ingress,
-                    "ledger ready"
-                );
-            }
-            Err(initialization_error) => {
-                error!(error = %initialization_error, "ledger could not open its SQLite state");
-            }
+
+    // Reserve the configured port before SQLite startup so a rolling
+    // replacement participates in the platform's startup lifecycle. Unlike
+    // the failed candidate, this listener never serves a permanent 503: a
+    // bounded lock retry either opens the fresh durable database or exits for
+    // the platform to restart.
+    let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
+    let pool = match open_runtime_pool_with_retry(
+        &database_url,
+        STARTUP_MAX_ATTEMPTS,
+        STARTUP_RETRY_DELAY,
+    )
+    .await
+    {
+        Ok(pool) => pool,
+        Err(startup_error) => {
+            error!(
+                error = %startup_error,
+                startup_attempt_limit = STARTUP_MAX_ATTEMPTS,
+                "ledger startup failed; exiting instead of serving an unready response"
+            );
+            return Err(startup_error);
         }
-    });
+    };
+    let state = AppState::new(pool, admin_token)
+        .with_trusted_proxy_ips(trusted_proxy_ips)
+        .with_managed_ingress(managed_ingress);
     info!(
         port,
-        trusted_proxy_count, managed_ingress, "ledger startup listener ready"
+        database_url,
+        admin_token_source = %admin_token_source,
+        admin_token_file = %admin_token_path.display(),
+        trusted_proxy_count,
+        managed_ingress,
+        sqlite_connections = 1,
+        startup_attempt_limit = STARTUP_MAX_ATTEMPTS,
+        "ledger ready"
     );
     axum::serve(
         listener,
-        starting_router(runtime).into_make_service_with_connect_info::<SocketAddr>(),
+        app(state, static_dir).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
-}
-
-fn starting_router(runtime: Runtime) -> Router {
-    Router::new().fallback(any(dispatch)).with_state(runtime)
-}
-
-async fn dispatch(State(runtime): State<Runtime>, request: Request<Body>) -> Response {
-    let active_app = runtime.app.read().await.clone();
-    if let Some(active_app) = active_app {
-        return active_app
-            .oneshot(request)
-            .await
-            .unwrap_or_else(|never| match never {});
-    }
-    let mut response = (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Ledger is starting its local storage. Try again shortly.",
-    )
-        .into_response();
-    response
-        .headers_mut()
-        .insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
-    response
-}
-
-async fn open_runtime_pools(
-    database_url: &str,
-) -> anyhow::Result<(sqlx::SqlitePool, sqlx::SqlitePool)> {
-    let mut attempt = 0u64;
-    loop {
-        attempt += 1;
-        let error = match create_pool(database_url)
-            .await
-            .map_err(|error| anyhow::anyhow!("ledger SQLite: {error}"))
-        {
-            Ok(pool) => match create_rate_limit_pool(database_url).await {
-                Ok(rate_limit_pool) => return Ok((pool, rate_limit_pool)),
-                Err(error) => {
-                    drop(pool);
-                    anyhow::anyhow!("rate-limit SQLite: {error}")
-                }
-            },
-            Err(error) => error,
-        };
-        if !is_database_locked(&error) {
-            return Err(error);
-        }
-        warn!(attempt, error = %error, "SQLite is busy during rolling startup; retrying");
-        sleep(Duration::from_secs(2)).await;
-    }
-}
-
-fn is_database_locked(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.to_string().contains("database is locked"))
 }
 
 async fn shutdown_signal() {

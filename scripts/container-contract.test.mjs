@@ -23,18 +23,29 @@ test('runtime image carries the supplied build identity and starts with defaults
   assert.match(runtime, /^ARG BUILD_SHA$/m);
   assert.match(runtime, /^\s*BUILD_SHA=\$BUILD_SHA \\/m);
   assert.match(runtime, /^ENV PORT=8080 \\/m);
-  assert.match(runtime, /^\s*ADMIN_TOKEN_FILE=\/data\/admin-token \\/m);
+  assert.match(runtime, /^\s*DATABASE_URL="sqlite:\/\/\/data\/internal-event-ledger-r8\/ledger\.db\?mode=rwc" \\/m);
+  assert.match(runtime, /^\s*ADMIN_TOKEN_FILE=\/data\/internal-event-ledger-r8\/admin-token \\/m);
   assert.match(runtime, /org\.opencontainers\.image\.revision=\$BUILD_SHA/);
   assert.doesNotMatch(runtime, /ADMIN_TOKEN=/);
 });
 
-test('rolling startup binds before it opens the durable SQLite files', () => {
+test('startup uses a fresh data directory, one connection, DELETE journals, and bounded retries', () => {
   const listener = serverMain.indexOf('let listener = TcpListener::bind');
-  const pools = serverMain.indexOf('open_runtime_pools(&database_url).await');
+  const pool = serverMain.indexOf('open_runtime_pool_with_retry(');
   assert.ok(listener >= 0, 'the service must bind its configured PORT');
-  assert.ok(pools >= 0, 'the service must open its SQLite pools');
-  assert.ok(listener < pools, 'a replacement must bind before it contends with an older SQLite writer');
-  assert.match(serverMain, /SQLite is busy during rolling startup; retrying/);
+  assert.ok(pool >= 0, 'the service must open its SQLite pool');
+  assert.ok(listener < pool, 'a replacement must bind before it opens SQLite');
+  assert.match(serverMain, /exiting instead of serving an unready response/);
+  assert.match(serverMain, /STARTUP_MAX_ATTEMPTS/);
+  assert.match(dockerfile, /internal-event-ledger-r8\/ledger\.db/);
+});
+
+test('the SQLite policy is one connection with a rollback DELETE journal', async () => {
+  const library = await readFile(new URL('../src/lib.rs', import.meta.url), 'utf8');
+  assert.match(library, /STORAGE_SUBDIRECTORY: &str = "internal-event-ledger-r8"/);
+  assert.match(library, /\.journal_mode\(SqliteJournalMode::Delete\)/);
+  assert.match(library, /\.max_connections\(1\)/);
+  assert.doesNotMatch(library, /create_rate_limit_pool|rate_limit_database_url|clear_empty_database_journal/);
 });
 
 test('site discovery and designed error documents ship in the frontend', async () => {

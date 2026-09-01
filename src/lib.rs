@@ -18,14 +18,14 @@ use sqlx::{
     FromRow, Row, SqlitePool,
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fs::{self, OpenOptions},
     io::{ErrorKind, Write},
     net::IpAddr,
     path::{Path as FilePath, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex},
-    time::Instant,
+    sync::Arc,
+    time::Duration as StdDuration,
 };
 use subtle::ConstantTimeEq;
 use tower_http::{
@@ -34,9 +34,43 @@ use tower_http::{
     services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
+use tracing::warn;
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// A new directory is deliberately used for the repaired ledger.  It keeps
+/// this revision away from a file which an earlier revision may still have
+/// locked on the durable share.  The application never deletes or renames
+/// that older file.
+pub const STORAGE_SUBDIRECTORY: &str = "internal-event-ledger-r8";
+pub const DATABASE_FILE_NAME: &str = "ledger.db";
+pub const STARTUP_MAX_ATTEMPTS: usize = 3;
+pub const STARTUP_RETRY_DELAY: StdDuration = StdDuration::from_secs(1);
+
+pub fn default_storage_directory() -> PathBuf {
+    let durable_mount = FilePath::new("/data");
+    if durable_mount.is_dir() {
+        return durable_mount.join(STORAGE_SUBDIRECTORY);
+    }
+
+    // Native development does not normally have the deployment's mounted
+    // share.  The image always has /data, so deployed state remains strictly
+    // under /data while a PORT-only local run still works without setup.
+    PathBuf::from(".internal-event-ledger-data")
+}
+
+pub fn default_database_url() -> String {
+    sqlite_url(&default_storage_directory().join(DATABASE_FILE_NAME))
+}
+
+pub fn default_admin_token_path() -> PathBuf {
+    default_storage_directory().join("admin-token")
+}
+
+pub fn sqlite_url(path: &FilePath) -> String {
+    format!("sqlite://{}?mode=rwc", path.display())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdminTokenSource {
@@ -114,25 +148,16 @@ pub fn load_or_create_admin_token(
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
-    rate_limit_pool: SqlitePool,
     admin_token: Arc<str>,
-    ingest_limits: Arc<Mutex<HashMap<String, IngestBucket>>>,
     trusted_proxy_ips: Arc<HashSet<IpAddr>>,
     trust_managed_ingress: bool,
-}
-
-struct IngestBucket {
-    tokens: f64,
-    updated_at: Instant,
 }
 
 impl AppState {
     pub fn new(pool: SqlitePool, admin_token: String) -> Self {
         Self {
-            rate_limit_pool: pool.clone(),
             pool,
             admin_token: Arc::from(admin_token),
-            ingest_limits: Arc::new(Mutex::new(HashMap::new())),
             trusted_proxy_ips: Arc::new(HashSet::new()),
             trust_managed_ingress: false,
         }
@@ -145,11 +170,6 @@ impl AppState {
 
     pub fn with_managed_ingress(mut self, enabled: bool) -> Self {
         self.trust_managed_ingress = enabled;
-        self
-    }
-
-    pub fn with_rate_limit_pool(mut self, rate_limit_pool: SqlitePool) -> Self {
-        self.rate_limit_pool = rate_limit_pool;
         self
     }
 }
@@ -183,33 +203,23 @@ pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
     Ok(pool)
 }
 
-pub async fn create_rate_limit_pool(ledger_url: &str) -> anyhow::Result<SqlitePool> {
-    let pool = open_pool(&rate_limit_database_url(ledger_url)).await?;
-    let initialized = sqlx::raw_sql(include_str!(
-        "../migrations/0002_shared_ephemeral_state.sql"
-    ))
-    .execute(&pool)
-    .await;
-    if let Err(error) = initialized {
-        pool.close().await;
-        return Err(error.into());
-    }
-    Ok(pool)
-}
-
 async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
-    clear_empty_database_journal(url)?;
+    ensure_database_parent(url)?;
     let options = SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Memory);
+        .foreign_keys(true)
+        .busy_timeout(StdDuration::from_secs(1))
+        // Azure Files is a mounted share, not a local disk.  Keep SQLite in
+        // the conservative rollback-journal mode requested for this service.
+        .journal_mode(SqliteJournalMode::Delete);
     let pool = SqlitePoolOptions::new()
-        // The deployment is intentionally a single SQLite writer. One
-        // connection prevents first-boot schema work from contending with an
-        // idle connection on mounted file storage.
+        // The mounted volume has one replica and this pool has exactly one
+        // connection.  All ledger, demo, and rate-limit writes serialize on
+        // that connection instead of creating competing SQLite writers.
         .max_connections(1)
         .after_connect(|connection, _| {
             Box::pin(async move {
-                sqlx::query("PRAGMA busy_timeout = 5000")
+                sqlx::query("PRAGMA busy_timeout = 1000")
                     .execute(connection)
                     .await?;
                 Ok(())
@@ -220,21 +230,16 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
     Ok(pool)
 }
 
-fn clear_empty_database_journal(url: &str) -> anyhow::Result<()> {
+fn ensure_database_parent(url: &str) -> anyhow::Result<()> {
     let Some(database_path) = sqlite_file_path(url) else {
         return Ok(());
     };
-    let is_empty = fs::metadata(&database_path)
-        .map(|metadata| metadata.len() == 0)
-        .unwrap_or(false);
-    if !is_empty {
-        return Ok(());
+    if let Some(parent) = database_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
     }
-    let journal_path = PathBuf::from(format!("{}-journal", database_path.display()));
-    if journal_path.is_file() {
-        fs::remove_file(journal_path)?;
-    }
-    fs::remove_file(database_path)?;
     Ok(())
 }
 
@@ -248,20 +253,6 @@ async fn table_exists(pool: &SqlitePool, table: &str) -> anyhow::Result<bool> {
         != 0)
 }
 
-fn rate_limit_database_url(ledger_url: &str) -> String {
-    let ledger_path = sqlite_file_path(ledger_url);
-    let Some(ledger_path) = ledger_path else {
-        return "sqlite://ledger-rate-limits.db?mode=rwc".into();
-    };
-    let stem = ledger_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("ledger");
-    let sidecar = ledger_path.with_file_name(format!("{stem}-rate-limits.db"));
-    format!("sqlite://{}?mode=rwc", sidecar.display())
-}
-
 fn sqlite_file_path(url: &str) -> Option<PathBuf> {
     let path = url
         .split_once('?')
@@ -272,6 +263,45 @@ fn sqlite_file_path(url: &str) -> Option<PathBuf> {
         return None;
     }
     Some(FilePath::new(path).to_path_buf())
+}
+
+pub async fn open_runtime_pool_with_retry(
+    database_url: &str,
+    max_attempts: usize,
+    retry_delay: StdDuration,
+) -> anyhow::Result<SqlitePool> {
+    let max_attempts = max_attempts.max(1);
+    for attempt in 1..=max_attempts {
+        match create_pool(database_url).await {
+            Ok(pool) => return Ok(pool),
+            Err(error) if is_database_locked(&error) && attempt < max_attempts => {
+                warn!(
+                    attempt,
+                    max_attempts,
+                    error = %error,
+                    "SQLite is busy during startup; retrying"
+                );
+                tokio::time::sleep(retry_delay).await;
+            }
+            Err(error) if is_database_locked(&error) => {
+                anyhow::bail!(
+                    "SQLite remained locked after {max_attempts} startup attempts: {error}"
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the startup retry loop always returns")
+}
+
+pub fn is_database_locked(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let text = cause.to_string().to_ascii_lowercase();
+        text.contains("database is locked")
+            || text.contains("database is busy")
+            || text.contains("sqlite_busy")
+            || text.contains("sqlite code 5")
+    })
 }
 
 pub fn app(state: AppState, static_dir: PathBuf) -> Router {
@@ -446,11 +476,10 @@ async fn limit_api_requests(
     next: Next,
 ) -> Response {
     let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    let allowed =
-        match take_shared_request_token(&state.rate_limit_pool, "api", address, 60.0, 20.0).await {
-            Ok(allowed) => allowed,
-            Err(error) => return error.into_response(),
-        };
+    let allowed = match take_shared_request_token(&state.pool, "api", address, 60.0, 20.0).await {
+        Ok(allowed) => allowed,
+        Err(error) => return error.into_response(),
+    };
     if !allowed {
         return ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -469,13 +498,11 @@ async fn limit_ingest_requests(
     next: Next,
 ) -> Response {
     let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    let allowed =
-        match take_shared_request_token(&state.rate_limit_pool, "ingest", address, 240.0, 40.0)
-            .await
-        {
-            Ok(allowed) => allowed,
-            Err(error) => return error.into_response(),
-        };
+    let allowed = match take_shared_request_token(&state.pool, "ingest", address, 240.0, 40.0).await
+    {
+        Ok(allowed) => allowed,
+        Err(error) => return error.into_response(),
+    };
     if !allowed {
         return ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -565,15 +592,7 @@ async fn create_demo(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    if !take_shared_request_token(
-        &state.rate_limit_pool,
-        "demo-create",
-        address,
-        10.0,
-        1.0 / 60.0,
-    )
-    .await?
-    {
+    if !take_shared_request_token(&state.pool, "demo-create", address, 10.0, 1.0 / 60.0).await? {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "This client created too many demos. Try again shortly.".into(),
@@ -873,11 +892,16 @@ async fn ingest(
             ));
         }
     }
-    if !take_ingest_token(
-        &s,
-        &source.id,
+    let receiver_scope = format!("ingest-auth:{}", source.id);
+    if !take_shared_request_token(
+        &s.pool,
+        &receiver_scope,
         client_ip(&s, peer.as_ref().map(|Extension(peer)| peer), &headers),
-    ) {
+        120.0,
+        1.0,
+    )
+    .await?
+    {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "This receiver is accepting events too quickly. Try again shortly.".into(),
@@ -940,32 +964,6 @@ async fn ingest(
         StatusCode::ACCEPTED,
         Json(json!({"accepted":true,"fingerprint":fingerprint})),
     ))
-}
-
-/// Limit only successfully authenticated deliveries. A sender without a valid
-/// receiver secret cannot spend another source's capacity, and each source/IP
-/// pair has its own 120-event burst with a one-event-per-second refill.
-fn take_ingest_token(state: &AppState, source_id: &str, peer_ip: Option<std::net::IpAddr>) -> bool {
-    let key = format!(
-        "{source_id}:{}",
-        peer_ip
-            .map(|ip| ip.to_string())
-            .unwrap_or_else(|| "direct".into())
-    );
-    let now = Instant::now();
-    let mut limits = state.ingest_limits.lock().expect("ingest rate-limit lock");
-    let bucket = limits.entry(key).or_insert(IngestBucket {
-        tokens: 120.0,
-        updated_at: now,
-    });
-    let elapsed = now.duration_since(bucket.updated_at).as_secs_f64();
-    bucket.tokens = (bucket.tokens + elapsed).min(120.0);
-    bucket.updated_at = now;
-    if bucket.tokens < 1.0 {
-        return false;
-    }
-    bucket.tokens -= 1.0;
-    true
 }
 
 /// `X-Forwarded-For` is trusted only behind the detected managed ingress or
@@ -1348,62 +1346,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_ledger_starts_while_a_writer_holds_the_database_lock() {
-        let path = std::env::temp_dir().join(format!("ledger-rollout-{}.db", Uuid::new_v4()));
-        let url = format!("sqlite://{}?mode=rwc", path.display());
-        let initial_pool = create_pool(&url).await.unwrap();
-        sqlx::query("DROP TABLE demo_workspaces")
-            .execute(&initial_pool)
-            .await
-            .unwrap();
-        sqlx::query("DROP TABLE request_rate_limits")
-            .execute(&initial_pool)
-            .await
-            .unwrap();
-        initial_pool.close().await;
+    async fn fresh_database_path_starts_while_the_legacy_database_is_locked() {
+        let root = std::env::temp_dir().join(format!("ledger-storage-{}", Uuid::new_v4()));
+        let legacy_path = root.join("ledger-current.db");
+        let legacy_url = sqlite_url(&legacy_path);
+        let legacy_pool = create_pool(&legacy_url).await.unwrap();
+        legacy_pool.close().await;
+        let legacy_size = fs::metadata(&legacy_path).unwrap().len();
 
-        let mut writer = SqliteConnection::connect(&url).await.unwrap();
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&mut writer)
-            .await
-            .unwrap();
-        sqlx::query("UPDATE settings SET value = value WHERE key = 'digest_hour'")
-            .execute(&mut writer)
+        let mut legacy_writer = SqliteConnection::connect(&legacy_url).await.unwrap();
+        sqlx::query("BEGIN EXCLUSIVE")
+            .execute(&mut legacy_writer)
             .await
             .unwrap();
 
-        let reopened =
-            tokio::time::timeout(std::time::Duration::from_millis(750), create_pool(&url))
+        let repaired_path = root.join(STORAGE_SUBDIRECTORY).join(DATABASE_FILE_NAME);
+        let repaired_pool = tokio::time::timeout(
+            StdDuration::from_secs(1),
+            create_pool(&sqlite_url(&repaired_path)),
+        )
+        .await
+        .expect("the new database path must not wait for the old lock")
+        .unwrap();
+        assert!(table_exists(&repaired_pool, "sources").await.unwrap());
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
+                .fetch_one(&repaired_pool)
                 .await
-                .expect("a legacy ledger must not run write migrations during rollout")
-                .unwrap();
-        assert!(!table_exists(&reopened, "request_rate_limits")
-            .await
-            .unwrap());
-        reopened.close().await;
+                .unwrap()
+                .to_ascii_lowercase(),
+            "delete"
+        );
+        repaired_pool.close().await;
 
-        let rate_limit_pool = create_rate_limit_pool(&url).await.unwrap();
-        assert!(table_exists(&rate_limit_pool, "request_rate_limits")
+        assert!(legacy_path.exists(), "the locked legacy file is untouched");
+        assert_eq!(fs::metadata(&legacy_path).unwrap().len(), legacy_size);
+        sqlx::query("ROLLBACK")
+            .execute(&mut legacy_writer)
             .await
-            .unwrap());
-        rate_limit_pool.close().await;
-
-        sqlx::query("ROLLBACK").execute(&mut writer).await.unwrap();
-        drop(writer);
-        let rate_limit_url = rate_limit_database_url(&url);
-        let rate_limit_path = rate_limit_url
-            .trim_start_matches("sqlite://")
-            .split('?')
-            .next()
             .unwrap();
-        let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(rate_limit_path);
+        drop(legacy_writer);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
-    async fn failed_pool_initialization_releases_its_sqlite_connection() {
+    async fn startup_lock_retry_is_bounded_and_releases_its_connection() {
         let path = std::env::temp_dir().join(format!("ledger-retry-{}.db", Uuid::new_v4()));
-        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let url = sqlite_url(&path);
         let initial_pool = create_pool(&url).await.unwrap();
         initial_pool.close().await;
 
@@ -1412,52 +1401,58 @@ mod tests {
             .execute(&mut writer)
             .await
             .unwrap();
-        let failed = tokio::time::timeout(std::time::Duration::from_secs(6), create_pool(&url))
-            .await
-            .expect("the busy timeout must return a database-lock error");
+        let failed = tokio::time::timeout(
+            StdDuration::from_secs(4),
+            open_runtime_pool_with_retry(&url, 2, StdDuration::from_millis(10)),
+        )
+        .await
+        .expect("startup retries must end instead of serving 503 forever");
         assert!(failed.is_err());
 
         sqlx::query("ROLLBACK").execute(&mut writer).await.unwrap();
         drop(writer);
-        let reopened =
-            tokio::time::timeout(std::time::Duration::from_millis(750), create_pool(&url))
-                .await
-                .expect("a failed pool must not retain its own SQLite lock")
-                .unwrap();
-        reopened.close().await;
-
-        let rate_limit_url = rate_limit_database_url(&url);
-        let rate_limit_path = rate_limit_url
-            .trim_start_matches("sqlite://")
-            .split('?')
-            .next()
+        let reopened = tokio::time::timeout(StdDuration::from_secs(1), create_pool(&url))
+            .await
+            .expect("a failed startup must release its SQLite connection")
             .unwrap();
-        let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(rate_limit_path);
+        reopened.close().await;
+        let _ = fs::remove_file(path);
     }
 
     #[tokio::test]
-    async fn zero_byte_ledger_recovers_only_its_orphaned_journal() {
-        let path = std::env::temp_dir().join(format!("ledger-recover-{}.db", Uuid::new_v4()));
-        let journal_path = PathBuf::from(format!("{}-journal", path.display()));
-        std::fs::write(&path, []).unwrap();
-        std::fs::write(&journal_path, [0_u8; 512]).unwrap();
-        let url = format!("sqlite://{}?mode=rwc", path.display());
-
+    async fn one_connection_persists_ledger_state_after_restart() {
+        let root = std::env::temp_dir().join(format!("ledger-persist-{}", Uuid::new_v4()));
+        let path = root.join(STORAGE_SUBDIRECTORY).join(DATABASE_FILE_NAME);
+        let url = sqlite_url(&path);
         let pool = create_pool(&url).await.unwrap();
-        assert!(!journal_path.exists());
-        assert!(std::fs::metadata(&path).unwrap().len() > 0);
-        assert!(table_exists(&pool, "sources").await.unwrap());
+        assert_eq!(pool.size(), 1, "the SQLite pool opens one connection");
+        sqlx::query("INSERT INTO sources(id,name,alias,token_hash,redact_headers,redact_paths,retention_days,created_at) VALUES(?,?,?,?,?,?,?,?)")
+            .bind("restart-source")
+            .bind("Restart source")
+            .bind("restart-source")
+            .bind("token-hash")
+            .bind("[]")
+            .bind("[]")
+            .bind(30_i64)
+            .bind(Utc::now().to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
         pool.close().await;
 
-        let rate_limit_url = rate_limit_database_url(&url);
-        let rate_limit_path = rate_limit_url
-            .trim_start_matches("sqlite://")
-            .split('?')
-            .next()
-            .unwrap();
-        let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(rate_limit_path);
+        let reopened = create_pool(&url).await.unwrap();
+        assert_eq!(reopened.size(), 1, "restart still uses one connection");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM sources WHERE alias='restart-source'"
+            )
+            .fetch_one(&reopened)
+            .await
+            .unwrap(),
+            1
+        );
+        reopened.close().await;
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

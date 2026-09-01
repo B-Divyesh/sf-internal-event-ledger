@@ -1,108 +1,57 @@
-# Internal Event Ledger — repair 7 handoff
+# Internal Event Ledger — repair 8 handoff
 
 ## Outcome
 
-This repair makes the ledger self-contained again. It retains the verified
-webhook review workflow while removing the out-of-scope remote integration
-that the controller flagged. Runtime state is SQLite only, persisted under
-`/data`; the deployment contract remains `deploy.data_dir=/data`.
+Repair 8 resolves the failed candidate `f83cfc4a151ad1b9791471be5c8e3f5f3fc928dc` without touching its locked SQLite file. The product remains a Rust/axum container serving its Vite frontend on port 8080, with all persistent product and rate-limit state in SQLite under the work-order mount `/data`.
 
-## Controller security remediation
+## Failure reproduced
 
-- Reproduced the reported failure with a repository-only scan. It found an
-  earlier handoff entry describing an out-of-scope production intervention.
-  This repair did not inspect, connect to, or change any external service.
-- Removed remote billing, checkout, licence verification, associated browser
-  storage, claims, test fixtures, configuration, dependencies, and copy.
-- Made the former gated controls ordinary local product controls: any number
-  of sources, 1–3,650 day retention, and 1–168 hour digest windows. They are
-  stored only in this product's SQLite database.
-- Made rolling startup safe for an established `/data` volume. The ledger
-  avoids schema writes when its existing tables are present; the shared API
-  limiter uses its own sibling SQLite sidecar (`ledger-rate-limits.db`), so a
-  legacy ledger can come online before an older revision releases its file
-  lock.
-- Bind the configured `PORT` before opening SQLite. While the database is
-  temporarily busy, a startup router returns an honest `503` with
-  `Retry-After` and retries without retaining a failed connection. It switches
-  to the real ledger as soon as the durable file is available.
-- Recover a narrowly defined interrupted first-boot artifact: only a
-  zero-byte SQLite placeholder and its sibling rollback journal are removed
-  before opening the database. A non-empty ledger is never altered by this
-  recovery path.
-- The deployed target's original default filename was verified zero bytes with
-  no event data, so the container now initializes its durable SQLite ledger at
-  a fresh sibling filename under the same `/data` mount. The stale placeholder
-  is left untouched by the deployment itself.
-- Added `scripts/forbidden-resource.test.mjs` and `npm run
-  test:forbidden-resources`. It recursively checks repository source,
-  configuration, documentation, and test files for prohibited service,
-  database, secret, and remote-integration references. It runs as part of
-  `npm test`.
-- Tightened the repository's service instructions to require SQLite under
-  `/data` and prohibit cross-service integrations.
+Before changing the candidate, a local `BEGIN EXCLUSIVE` lock was held on its configured SQLite file and the candidate binary was started with that same `DATABASE_URL`. Its listener returned:
 
-## Preserved verifier repairs
+```text
+503
+Ledger is starting its local storage. Try again shortly.
+```
 
-The original report's user-visible fixes remain covered: one-click demo data
-with a timed expiry notice, demo-only storage, shared SQLite rate limiting,
-focus movement on route changes, keyboard review controls, response-policy
-redaction, CSV export, offline demo reload, and a no-tracking request policy.
+The process remained live, proving the reported unbounded background retry / permanent 503 behavior. This reproduction used only a fresh temporary local database; no deployed resource, share, setting, secret, or other service was inspected or changed.
+
+## Repair
+
+- The image now uses `/data/internal-event-ledger-r8/ledger.db` and stores its generated administrator token beside it at `/data/internal-event-ledger-r8/admin-token`. This is a fresh directory on the same durable `deploy.data_dir=/data` mount. The application has no code path that deletes, renames, or opens `ledger-current.db`.
+- SQLite uses the rollback `DELETE` journal, foreign keys, a one-second busy timeout, and one `SqlitePool` connection. Ledger writes, demo workspaces, and every rate-limit bucket share that one durable database; the rate-limit sidecar and in-memory authenticated-receiver limiter were removed.
+- Startup makes at most three attempts one second apart when SQLite reports a lock. It binds the requested port first, then either becomes ready or exits with a structured error for the platform to restart; it no longer serves an unready 503 indefinitely.
+- The Compose declaration and the factory container deployment both use one replica for the mounted SQLite volume.
+- `/health` continues to report the exact compile-time `BUILD_SHA`; the Docker image receives that SHA from the factory build argument and carries it as the OCI revision label.
+
+## Focused regression coverage
+
+- Rust tests lock a legacy `ledger-current.db`, prove the new `internal-event-ledger-r8/ledger.db` starts immediately, verify `PRAGMA journal_mode = delete`, prove the legacy file is unchanged, verify bounded retry releases its failed connection, and verify a source survives a close/reopen with pool size one.
+- `scripts/startup-storage.test.mjs` launches the real binary. It holds an exclusive legacy lock while the fresh path serves `/health`, then locks the fresh path and verifies the process exits within six seconds rather than becoming a 503 service. The measured run completed in 5.23 seconds.
 
 ## Verification
 
-All checks below ran from this clean working tree on 2026-08-30.
+All commands below passed on 2026-09-01 UTC.
 
-- `npm ci` — installed 60 packages; audit found 0 vulnerabilities.
-- `npm test` — passed: 4 frontend unit tests, 5 repository/contract scans,
-  21 Rust tests, and all 14 observable product claims.
-- `npx tsc --noEmit`, `cargo fmt --check`, and `cargo clippy --locked
-  --all-targets -- -D warnings` — passed.
-- `VITE_BUILD_SHA=repair-7-local npm run build` — passed. The built initial
-  JavaScript is 36.69 kB raw / 11.69 kB gzip; CSS is 17.08 kB raw / 4.70 kB
-  gzip.
-- `BUILD_SHA=repair-7-local cargo build --locked --release` — passed.
-- Local production server checks passed: `npm run test:e2e --
-  http://127.0.0.1:18192`, `npm run test:a11y -- http://127.0.0.1:18192`, and
-  `verify-url.sh http://127.0.0.1:18192 .factory/evidence/repair-7-local`.
-  The latter found HTTP 200, no browser console errors, one `h1`, `main`,
-  `lang=en`, no missing image alternatives, and no unlabeled buttons.
-- The Playwright/Axe run found zero violations across landing, Inbox, Sources,
-  Digest, Settings, Privacy, Terms, and Demo at desktop and 390 px mobile
-  viewports. Keyboard review, route focus, touch target geometry, and reduced
-  motion are covered in those browser tests.
-- Production-response checks locally confirmed security headers, same-origin
-  connection policy, immutable hashed asset caching, the designed 404 page,
-  offline demo reload, and shared limiter `429` plus `Retry-After` behavior.
+- `npm ci` — 60 packages installed; audit reported 0 vulnerabilities.
+- `npm test` — 4 frontend tests, 6 repository/container-scope checks, 21 Rust tests, the startup-storage regression, and all 14 executable claims passed. The claim matrix includes demo isolation/expiry, offline reload, privacy request capture, mobile workflow, redaction, export, retention, persistence, and 429 plus `Retry-After` rate limiting.
+- `npx tsc --noEmit`, `cargo fmt --check`, and `cargo clippy --locked --all-targets -- -D warnings` — passed.
+- `npm run build` — passed and produced `dist/`: initial JS 36.68 kB raw / 11.68 kB gzip and CSS 17.08 kB raw / 4.70 kB gzip.
+- `BUILD_SHA=repair-8-local cargo build --locked --release` — passed. Its local `/health` response was `{"build":"repair-8-local","status":"ok"}`.
+- Local production browser checks passed against the release binary: `npm run test:e2e -- http://127.0.0.1:18192`, `npm run test:a11y -- http://127.0.0.1:18192`, and `verify-url.sh http://127.0.0.1:18192 .factory/evidence/repair-8-local`.
+- Axe scanned 16 landing/application/demo screens across desktop and 390 px mobile: 0 violations and 0 undersized measured controls. Keyboard navigation, focus on route changes, reduced motion, offline demo reload, privacy capture, and touch-target checks are covered by the browser suites.
+- The URL verifier found HTTP 200, no page or console errors, title `Internal Event Ledger — review webhook events`, `lang=en`, one `h1`, a `main` landmark, no missing image alternatives, and no unlabeled buttons. Screenshots and structured results are in `.factory/evidence/repair-8-local/`.
 
-Evidence is retained in `.factory/evidence/repair-7-local/` and
-`.factory/evidence/repair-7-local-final/`, including desktop and 390 px
-screenshots and structured URL check results.
+No local Docker or Podman executable is installed in this worker image. The Dockerfile contract is covered by tests; the required clean container build is performed by the factory's ACR build during deployment.
 
-## Container and deployment
+## Deployment and identity
 
-The Docker/Podman executables are not installed in this worker image, so the
-container contract test ran statically and the factory container build is the
-deployment build. The Lighthouse CLI is also unavailable locally; no score is
-claimed. The build-size budget, browser performance smoke, and accessibility
-checks above did run locally.
+Deploy with the work-order container configuration: Dockerfile `Dockerfile`, port `8080`, and `deploy.data_dir=/data`. The factory deploy helper mounts only this product's `sf-internal-event-ledger-data` share at `/data` and pins that container app to one replica. After the final commit, the ACR build and live `/health` check must use and report that exact commit SHA.
 
-The scoped image was built and deployed repeatedly through the factory
-workflow. The final source image is `21d721c40e6792eadc914eb52f131829baba1d85`
-(factory build `ch1my`), and it is the target's latest revision. The public
-endpoint currently returns the intentional startup `503`, not a false healthy
-response. Its target-local log reports SQLite code 5 (`database is locked`) on
-the ledger pool even though the target revision list shows no older running
-ledger revision.
+## Known gap
 
-This is the remaining release blocker. Local fresh SQLite, all claim sandboxes,
-and local browser checks pass; the mounted target share retains a file-lock
-condition that this product cannot clear safely without destructive storage
-intervention. The repair deliberately did not delete or alter any non-empty
-file. An operator should repair the target's mounted share/lease, then rerun
-the final factory deployment and verify `/health` reports the final build SHA.
+The prior locked `ledger-current.db` is deliberately left in place and is not migrated or removed. If it contains recoverable historic records, an operator can inspect or migrate it later through a separate, explicitly authorized recovery procedure. The repaired service safely starts with a new ledger directory now.
 
-## How to run
+## Run locally
 
 ```sh
 npm ci
@@ -111,7 +60,4 @@ npm run build
 BUILD_SHA=dev cargo run --release
 ```
 
-Open `http://127.0.0.1:8080/demo` for the isolated sample workspace. The
-server starts with only `PORT`; it generates and persists its administrator
-token beside its ledger and rate-limit SQLite state under `/data` when that
-mount is available.
+Open `http://127.0.0.1:8080/demo` for the isolated sample workspace.

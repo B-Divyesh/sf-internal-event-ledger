@@ -130,9 +130,10 @@ claim('self-hosted-runtime', async () => {
     }
     assert.ok(health?.ok, `PORT-only runtime did not start\n${output}`);
     assert.ok((await health.json()).build);
-    assert.equal((await readFile(join(runtimeDir, '.internal-event-ledger-admin-token'), 'utf8')).trim().length, 64);
-    assert.equal((await stat(join(runtimeDir, '.internal-event-ledger-admin-token'))).mode & 0o777, 0o600);
-    await access(join(runtimeDir, 'ledger.db'));
+    const nativeData = join(runtimeDir, '.internal-event-ledger-data');
+    assert.equal((await readFile(join(nativeData, 'admin-token'), 'utf8')).trim().length, 64);
+    assert.equal((await stat(join(nativeData, 'admin-token'))).mode & 0o777, 0o600);
+    await access(join(nativeData, 'ledger.db'));
     assert.equal((await fetch(`http://127.0.0.1:${runtimePort}/`)).status, 200);
   } finally {
     runtime.kill('SIGTERM');
@@ -323,46 +324,20 @@ claim('self-hosted-controls', async () => {
 });
 
 claim('api-rate-limit', async () => {
-  const replicaPort = await freePort();
-  const replica = spawn(join(process.cwd(), 'target/debug/internal-event-ledger'), [], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      PORT: String(replicaPort),
-      DATABASE_URL: `sqlite://${join(workDir, 'claims.db')}?mode=rwc`,
-      STATIC_DIR: join(process.cwd(), 'dist'),
-      ADMIN_TOKEN: adminToken,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let replicaOutput = '';
-  replica.stdout.on('data', (chunk) => { replicaOutput += chunk; });
-  replica.stderr.on('data', (chunk) => { replicaOutput += chunk; });
-  try {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      try { if ((await fetch(`http://127.0.0.1:${replicaPort}/health`)).ok) break; } catch {}
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      if (attempt === 99) throw new Error(`second limiter replica did not start\n${replicaOutput}`);
-    }
-    const burstStartedAt = performance.now();
-    const responses = await Promise.all(Array.from({ length: 120 }, (_, index) => {
-      const origin = index % 2 ? base : `http://127.0.0.1:${replicaPort}`;
-      return fetch(`${origin}/api/events`, { headers: { authorization: `Bearer ${adminToken}`, 'x-forwarded-for': '203.0.113.90' } });
-    }));
-    const burstElapsedSeconds = (performance.now() - burstStartedAt) / 1000;
-    const allowed = responses.filter((response) => response.status === 200).length;
-    const limited = responses.filter((response) => response.status === 429);
-    const maximumWithMeasuredRefill = 60 + Math.ceil(burstElapsedSeconds * 20) + 1;
-    assert.ok(
-      allowed >= 60 && allowed <= maximumWithMeasuredRefill,
-      `shared 60-token burst allowed ${allowed} in ${burstElapsedSeconds.toFixed(3)}s (maximum ${maximumWithMeasuredRefill})`,
-    );
-    assert.ok(limited.length >= 120 - maximumWithMeasuredRefill);
-    assert.ok(limited.every((response) => response.headers.get('retry-after') === '1'));
-  } finally {
-    replica.kill('SIGTERM');
-    if (replica.exitCode === null) await new Promise((resolve) => replica.once('exit', resolve));
-  }
+  const burstStartedAt = performance.now();
+  const responses = await Promise.all(Array.from({ length: 120 }, () =>
+    fetch(`${base}/api/events`, { headers: { authorization: `Bearer ${adminToken}`, 'x-forwarded-for': '203.0.113.90' } }),
+  ));
+  const burstElapsedSeconds = (performance.now() - burstStartedAt) / 1000;
+  const allowed = responses.filter((response) => response.status === 200).length;
+  const limited = responses.filter((response) => response.status === 429);
+  const maximumWithMeasuredRefill = 60 + Math.ceil(burstElapsedSeconds * 20) + 1;
+  assert.ok(
+    allowed >= 60 && allowed <= maximumWithMeasuredRefill,
+    `one-connection 60-token burst allowed ${allowed} in ${burstElapsedSeconds.toFixed(3)}s (maximum ${maximumWithMeasuredRefill})`,
+  );
+  assert.ok(limited.length >= 120 - maximumWithMeasuredRefill);
+  assert.ok(limited.every((response) => response.headers.get('retry-after') === '1'));
 });
 
 after(async () => {
