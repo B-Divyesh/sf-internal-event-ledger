@@ -1,3 +1,4 @@
+use anyhow::Context;
 use axum::{
     body::{Body, Bytes},
     extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, State},
@@ -43,7 +44,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// the failed exclusive-lock revisions, and every later restart reuses it.
 /// The application never deletes or renames an earlier database.
 pub const STORAGE_SUBDIRECTORY: &str = "internal-event-ledger";
-pub const DATABASE_FILE_NAME: &str = "ledger.db";
+pub const DATABASE_FILE_NAME: &str = "events.sqlite3";
 pub const STARTUP_MAX_ATTEMPTS: usize = 3;
 pub const STARTUP_RETRY_DELAY: StdDuration = StdDuration::from_secs(1);
 
@@ -174,7 +175,9 @@ impl AppState {
 }
 
 pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
-    let pool = open_pool(url).await?;
+    let pool = open_pool(url)
+        .await
+        .context("opening the SQLite connection pool")?;
 
     // A rolling deployment starts the new revision alongside the old one. Do
     // not issue `CREATE … IF NOT EXISTS` against a ledger that is already
@@ -182,15 +185,20 @@ pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
     // serving revision on the durable /data volume. New databases still get
     // the complete schema before the application accepts requests.
     let initialized = async {
-        if !table_exists(&pool, "sources").await? {
+        if !table_exists(&pool, "sources")
+            .await
+            .context("checking whether the ledger schema exists")?
+        {
             sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
                 .execute(&pool)
-                .await?;
+                .await
+                .context("creating the ledger schema")?;
             sqlx::raw_sql(include_str!(
                 "../migrations/0002_shared_ephemeral_state.sql"
             ))
             .execute(&pool)
-            .await?;
+            .await
+            .context("creating the demo and rate-limit schema")?;
         }
         Ok::<(), anyhow::Error>(())
     }
@@ -212,7 +220,7 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
         // processes can briefly share /data without either process retaining
         // an exclusive SQLite lease for its full lifetime.
         .busy_timeout(StdDuration::from_secs(1));
-    let pool = SqlitePoolOptions::new()
+    SqlitePoolOptions::new()
         // The mounted volume has one replica and this pool has exactly one
         // connection.  All ledger, demo, and rate-limit writes serialize on
         // that connection instead of creating competing SQLite writers.
@@ -226,19 +234,8 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
             })
         })
         .connect_with(options)
-        .await?;
-    // A newly created SQLite database defaults to the rollback DELETE journal.
-    // Read and verify that mode instead of issuing `PRAGMA journal_mode=DELETE`
-    // on every connection: changing a journal mode takes an exclusive lock and
-    // can itself fail on Azure Files while an earlier failed revision unwinds.
-    let journal_mode = sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
-        .fetch_one(&pool)
-        .await?;
-    if !journal_mode.eq_ignore_ascii_case("delete") {
-        pool.close().await;
-        anyhow::bail!("SQLite rollback DELETE journal is required, found {journal_mode:?}");
-    }
-    Ok(pool)
+        .await
+        .context("connecting to the SQLite file")
 }
 
 fn ensure_database_parent(url: &str) -> anyhow::Result<()> {

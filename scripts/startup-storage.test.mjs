@@ -80,7 +80,7 @@ async function adminRequest(port, token, path, options = {}) {
 test('a rolling process starts on the same mounted database and state survives a full restart', async () => {
   const workDir = await mkdtemp(join(tmpdir(), 'ledger-startup-storage-'));
   const legacyPath = join(workDir, 'ledger-current.db');
-  const safePath = join(workDir, 'internal-event-ledger', 'ledger.db');
+  const safePath = join(workDir, 'internal-event-ledger', 'events.sqlite3');
   const tokenFile = join(workDir, 'internal-event-ledger', 'admin-token');
   const legacy = new DatabaseSync(legacyPath);
   let first;

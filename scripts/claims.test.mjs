@@ -150,7 +150,7 @@ claim('self-hosted-runtime', async () => {
     const nativeData = join(runtimeDir, '.internal-event-ledger-data');
     assert.equal((await readFile(join(nativeData, 'admin-token'), 'utf8')).trim().length, 64);
     assert.equal((await stat(join(nativeData, 'admin-token'))).mode & 0o777, 0o600);
-    await access(join(nativeData, 'ledger.db'));
+    await access(join(nativeData, 'events.sqlite3'));
     assert.equal((await fetch(`http://127.0.0.1:${runtimePort}/`)).status, 200);
   } finally {
     runtime.kill('SIGTERM');
