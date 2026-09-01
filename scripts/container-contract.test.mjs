@@ -40,13 +40,14 @@ test('startup uses a fresh data directory, one connection, DELETE journals, and 
   assert.match(dockerfile, /internal-event-ledger-r10\/ledger\.db/);
 });
 
-test('the SQLite policy is one connection with a rollback DELETE journal', async () => {
+test('the SQLite policy is one connection with a rollback DELETE journal and rolling-safe locks', async () => {
   const library = await readFile(new URL('../src/lib.rs', import.meta.url), 'utf8');
   assert.match(library, /STORAGE_SUBDIRECTORY: &str = "internal-event-ledger-r10"/);
   assert.match(library, /SQLite rollback DELETE journal is required/);
   assert.match(library, /PRAGMA journal_mode/);
   assert.match(library, /\.max_connections\(1\)/);
-  assert.match(library, /\.locking_mode\(SqliteLockingMode::Exclusive\)/);
+  assert.doesNotMatch(library, /SqliteLockingMode::Exclusive|locking_mode\s*\(/);
+  assert.match(library, /NORMAL locking releases each read\/write lease/);
   assert.doesNotMatch(library, /create_rate_limit_pool|rate_limit_database_url|clear_empty_database_journal/);
 });
 

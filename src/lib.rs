@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteLockingMode, SqlitePoolOptions, SqliteRow},
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow},
     FromRow, Row, SqlitePool,
 };
 use std::{
@@ -208,11 +208,11 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
     let options = SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
         .foreign_keys(true)
-        .busy_timeout(StdDuration::from_secs(1))
-        // There is exactly one process and one pool connection for this
-        // mounted database. Retain its exclusive file lock instead of
-        // renegotiating shared SQLite locks on Azure Files per statement.
-        .locking_mode(SqliteLockingMode::Exclusive);
+        // NORMAL locking releases each read/write lease after the statement.
+        // That matters during a rolling replacement: the old and new
+        // processes can briefly share /data without either process retaining
+        // an exclusive SQLite lease for its full lifetime.
+        .busy_timeout(StdDuration::from_secs(1));
     let pool = SqlitePoolOptions::new()
         // The mounted volume has one replica and this pool has exactly one
         // connection.  All ledger, demo, and rate-limit writes serialize on

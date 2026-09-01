@@ -3,8 +3,12 @@ import { chromium } from 'playwright';
 const base = process.argv[2] || 'http://127.0.0.1:8080';
 const adminToken = process.env.ADMIN_TOKEN || 'ledger-test-admin';
 const executablePath = process.env.CHROMIUM_PATH;
+const viewport = {
+  width: Number(process.env.VIEWPORT_WIDTH || 390),
+  height: Number(process.env.VIEWPORT_HEIGHT || 844),
+};
 const browser = await chromium.launch(executablePath ? { executablePath } : {});
-const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+const context = await browser.newContext({ viewport });
 const page = await context.newPage();
 const errors = [];
 const badResponses = [];
@@ -13,10 +17,20 @@ page.on('console', (message) => { if (message.type() === 'error') errors.push(me
 page.on('response', (response) => { if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`); });
 
 await page.goto(base, { waitUntil: 'networkidle' });
+await page.keyboard.press('Tab');
+if (!await page.locator('.skip-link').evaluate((node) => node === document.activeElement)) {
+  throw new Error('Skip link was not first in keyboard order');
+}
+await page.keyboard.press('Enter');
+if (!await page.locator('#main').evaluate((node) => node === document.activeElement)) {
+  throw new Error('Skip link did not move keyboard focus to main content');
+}
 await page.getByLabel('Administrator token').fill(adminToken);
 await page.getByRole('button', { name: 'Open my ledger' }).click();
 await page.getByRole('heading', { name: 'Event ledger' }).waitFor();
-await page.getByRole('button', { name: 'Sources' }).click();
+await page.getByRole('button', { name: 'Sources', exact: true }).focus();
+await page.keyboard.press('Enter');
+await page.getByRole('heading', { name: 'Incoming sources' }).waitFor();
 const suffix = Date.now().toString().slice(-7);
 await page.getByLabel('Source name').fill(`Smoke source ${suffix}`);
 await page.getByLabel('Endpoint alias').fill(`smoke-${suffix}`);
@@ -49,4 +63,4 @@ if (created) await context.request.delete(`${base}/api/sources/${created.id}`, {
 
 await browser.close();
 if (h1Count !== 1 || errors.length) throw new Error(`Smoke failed: h1=${h1Count}, errors=${JSON.stringify(errors)}, responses=${JSON.stringify(badResponses)}`);
-console.log(JSON.stringify({ status: 'ok', source: `smoke-${suffix}`, ingest: 202, acknowledged: true, digest: true, privacy: true, consoleErrors: 0 }));
+console.log(JSON.stringify({ status: 'ok', viewport, keyboard: true, source: `smoke-${suffix}`, ingest: 202, acknowledged: true, digest: true, privacy: true, consoleErrors: 0 }));

@@ -21,7 +21,7 @@ docker compose up --build -d
 docker compose exec ledger cat /data/internal-event-ledger-r10/admin-token
 ```
 
-Open `http://localhost:8080`. The container runs as a non-root user and stores its ledger database, rate-limit state, and generated administrator token in `/data/internal-event-ledger-r10/`. This repaired directory is intentionally separate from earlier locked filenames; the application never deletes or renames them. The mounted deployment runs one replica with one SQLite connection, an exclusive SQLite file lock, and SQLite's rollback `DELETE` journal. Enter the token in **Open your ledger**; it is retained only for that browser tab. Set `ADMIN_TOKEN` to override generation, and set `BUILD_SHA` to stamp a release image.
+Open `http://localhost:8080`. The container runs as a non-root user and stores its ledger database, rate-limit state, and generated administrator token in `/data/internal-event-ledger-r10/`. This repaired directory is intentionally separate from earlier locked filenames; the application never deletes or renames them. The mounted deployment runs one replica with one SQLite connection, normal statement-scoped locks, and SQLite's rollback `DELETE` journal. Enter the token in **Open your ledger**; it is retained only for that browser tab. Set `ADMIN_TOKEN` to override generation, and set `BUILD_SHA` to stamp a release image.
 
 To build and run the image directly:
 
