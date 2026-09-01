@@ -1,0 +1,88 @@
+{
+  "url": "https://internal-event-ledger.sociobot.in/",
+  "status": 200,
+  "title": "Internal Event Ledger — review webhook events",
+  "headers": {
+    "accept-ranges": "bytes",
+    "cache-control": "no-cache",
+    "content-length": "1791",
+    "content-security-policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    "content-type": "text/html",
+    "date": "Tue, 01 Sep 2026 22:43:17 GMT",
+    "last-modified": "Tue, 01 Sep 2026 22:12:06 GMT",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "referrer-policy": "no-referrer",
+    "strict-transport-security": "max-age=31536000",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY"
+  },
+  "h1": [
+    "Review operational events without Slack noise"
+  ],
+  "mainCount": 1,
+  "lang": "en",
+  "viewportText": "Skip to ledger\nIEL\nINTERNAL EVENT\nCENTRAL LEDGER\nDemo\nPrivacy\nTerms\n\nSELF-HOSTED WEBHOOK REVIEW\n\nREVIEW OPERATIONAL EVENTS WITHOUT SLACK NOISE\n\nFor solo developers and small teams that need searchable webhook history without another urgent inbox.\n\nTry it with sample data\nOpens an isolated sample ledger with no token.\nSelf-host on your own server.\nNo analytics or third-party scripts.\nAll core controls stay local.\n\nYOUR DEPLOYMENT\n\nOPEN YOUR LEDGER\n\nEnter the administrator token from your server. It stays in this browser tab.\n\nAdministrator token\n\nFind it in the server file shown during setup.\n\nOpen my ledger\n\nA SEARCHABLE RECORD\n\nSEE REPEATS BEFORE THEY BECOME NOISE\n\nEach receiver groups matching events by fingerprint. Reviewers can search, acknowledge, archive, and export the record.\n\nRefund review requested\nCheckout API · 3 arrivals\nCatalogue import needs two files\nCustomer imports · 2 arrivals\nProduction deploy completed\nDeploy pipeline · acknowledged\n\nHOW IT WORKS\n\nROUTE, REVIEW, RETAIN\nConnect a source.\nCreate a private JSON receiver and optional signature rule.\nReview grouped events.\nSearch summaries and payloads without chat interruptions.\nKeep the useful record.\nAcknowledge, archive, delete by retention, or export.\n\nCLEAR BOUNDARIES\n\nUSE AN INCIDENT TOOL FOR URGENT ALERTS\n\nThis ledger does not page people, retry webhooks, or guarantee delivery.\n\nLOCAL STORAGE\n\nKEEP THE RECORD ON YOUR SERVER\n\nSources, events, settings, and exports stay in this deployment's SQLite database.\n\nReview low-urgency operational events in a self-hosted ledger.\n\nPrivacy\nTerms\nBuilt by Param Factory\nBuild 2d241143dac3 · Poster artwork generated for Internal Event Ledger.",
+  "visibleLinks": [
+    {
+      "text": "Skip to ledger",
+      "href": "https://internal-event-ledger.sociobot.in/#main"
+    },
+    {
+      "text": "IEL\nINTERNAL EVENT\nCENTRAL LEDGER",
+      "href": "https://internal-event-ledger.sociobot.in/"
+    },
+    {
+      "text": "Demo",
+      "href": "https://internal-event-ledger.sociobot.in/demo"
+    },
+    {
+      "text": "Privacy",
+      "href": "https://internal-event-ledger.sociobot.in/privacy"
+    },
+    {
+      "text": "Terms",
+      "href": "https://internal-event-ledger.sociobot.in/terms"
+    },
+    {
+      "text": "Privacy",
+      "href": "https://internal-event-ledger.sociobot.in/privacy"
+    },
+    {
+      "text": "Terms",
+      "href": "https://internal-event-ledger.sociobot.in/terms"
+    }
+  ],
+  "visibleButtons": [
+    "Try it with sample data",
+    "Open my ledger"
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-CQ8gWKNu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-EAQ5Mx42.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/dispatch-hall.webp",
+      "resourceType": "image"
+    }
+  ],
+  "consoleErrors": [
+    {
+      "type": "warning",
+      "text": "Service Worker registration blocked by Playwright"
+    }
+  ],
+  "pageErrors": []
+}

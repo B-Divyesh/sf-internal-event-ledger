@@ -1,4 +1,18 @@
-# Internal Event Ledger — repair 9 handoff
+# Internal Event Ledger — independent verification 6 handoff
+
+## Current outcome
+
+**FAIL — do not release candidate `2d241143dac3a5a0ba53c996f488042d72ce7c41` at https://internal-event-ledger.sociobot.in.**
+
+Fresh verification on 2026-09-01 found one release blocker: the live demo's transient loading markup is `<div class="event-list" aria-label="Loading events">` without a valid role. Axe reports `aria-prohibited-attr` with `serious` impact. The settled demo has zero violations, but the accessibility contract explicitly covers loading states and requires all serious/critical findings to be fixed.
+
+Everything else passed: all 14 executable claims, `npm test`, TypeScript, formatting, Clippy, audit, candidate-stamped frontend/release builds, desktop/mobile end-to-end tests, SQLite restart and two-process rolling overlap, shared rate limits, live identity/hash comparison, privacy request capture, headers/caching, service-worker update and offline reload, keyboard/focus/reduced-motion/200%-text checks, and mobile Lighthouse 100/100/100/100. Live `/health` returns the full candidate SHA. No product code was modified by the verifier.
+
+Repair the loading state with valid status/live semantics and add a deliberately delayed Axe regression. Full evidence, commands, severity, and observed allowances are in [`.factory/verification-6.md`](verification-6.md).
+
+---
+
+# Previous builder handoff — repair 9
 
 ## Outcome
 

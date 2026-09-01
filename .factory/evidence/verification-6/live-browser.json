@@ -1,0 +1,213 @@
+{
+  "base": "https://internal-event-ledger.sociobot.in",
+  "scans": [
+    {
+      "name": "landing",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "name": "demo-inbox",
+      "viewport": "desktop",
+      "violations": [
+        {
+          "id": "aria-prohibited-attr",
+          "impact": "serious",
+          "nodes": 1
+        }
+      ]
+    },
+    {
+      "name": "privacy",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "name": "terms",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "name": "landing",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "name": "demo",
+      "viewport": "mobile",
+      "violations": [
+        {
+          "id": "aria-prohibited-attr",
+          "impact": "serious",
+          "nodes": 1
+        }
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/",
+      "type": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-CQ8gWKNu.js",
+      "type": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-EAQ5Mx42.css",
+      "type": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/dispatch-hall.webp",
+      "type": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/",
+      "type": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-CQ8gWKNu.js",
+      "type": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-EAQ5Mx42.css",
+      "type": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/dispatch-hall.webp",
+      "type": "image"
+    },
+    {
+      "method": "POST",
+      "url": "https://internal-event-ledger.sociobot.in/api/demo",
+      "type": "fetch"
+    },
+    {
+      "method": "DELETE",
+      "url": "https://internal-event-ledger.sociobot.in/api/demo/2172c010-97d4-42f7-8093-628aaf2873e4",
+      "type": "fetch"
+    },
+    {
+      "method": "POST",
+      "url": "https://internal-event-ledger.sociobot.in/api/demo",
+      "type": "fetch"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/privacy",
+      "type": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-CQ8gWKNu.js",
+      "type": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-EAQ5Mx42.css",
+      "type": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/terms",
+      "type": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-CQ8gWKNu.js",
+      "type": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://internal-event-ledger.sociobot.in/assets/index-EAQ5Mx42.css",
+      "type": "stylesheet"
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": [],
+  "demo": {
+    "path": "/demo",
+    "banner": "Demo — sample data, nothing is saved to your real ledger\nWorkspace\nReset demo\nStart for real",
+    "initialGroups": 0,
+    "tokenInputs": 0,
+    "searchCatalogueGroups": 2,
+    "afterArchiveVisibleGroups": 4,
+    "exports": {
+      "csvLines": 6,
+      "csvHeader": "id,source,type,summary,status,occurrences,first_seen,last_seen,fingerprint",
+      "jsonRecords": 5
+    },
+    "sourcesFocus": {
+      "tag": "H1",
+      "text": "Incoming sources"
+    },
+    "digest": {
+      "total": "11",
+      "focus": {
+        "tag": "H1",
+        "text": "Daily digest"
+      }
+    },
+    "backFocus": {
+      "tag": "H1",
+      "text": "Incoming sources"
+    },
+    "resetGroups": 5
+  },
+  "mobile": {
+    "headlineVisible": true,
+    "ctaVisible": true,
+    "headlineWithinFirstViewport": true,
+    "ctaWithinFirstViewport": true,
+    "landingScrollWidth": 390,
+    "landingClientWidth": 390,
+    "demoScrollWidth": 390,
+    "demoClientWidth": 390,
+    "demoGroups": 0
+  },
+  "keyboard": {
+    "firstFocus": {
+      "tag": "A",
+      "text": "Skip to ledger",
+      "outline": "rgb(6, 118, 154) solid 3px"
+    },
+    "afterSkip": {
+      "id": "main",
+      "tag": "MAIN"
+    }
+  },
+  "reducedMotion": {
+    "matches": true,
+    "transitionDuration": "1e-05s",
+    "animationDuration": "1e-05s",
+    "activeAnimations": 0
+  },
+  "text200": {
+    "scrollWidth": 390,
+    "clientWidth": 390,
+    "h1Visible": true,
+    "bannerVisible": true
+  },
+  "pwa": {
+    "scriptURL": "https://internal-event-ledger.sociobot.in/sw.js?build=2d241143dac3a5a0ba53c996f488042d72ce7c41",
+    "controller": true,
+    "caches": [
+      "ledger-shell-2d241143dac3a5a0ba53c996f488042d72ce7c41"
+    ],
+    "offlineGroups": 5,
+    "h1": "Event ledger",
+    "errors": []
+  },
+  "requestOrigins": [
+    "https://internal-event-ledger.sociobot.in"
+  ],
+  "sameOriginOnly": true
+}
