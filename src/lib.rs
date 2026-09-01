@@ -299,14 +299,17 @@ async fn bootstrap_file_database(database_path: &FilePath) -> anyhow::Result<()>
 }
 
 async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
-    let options = SqliteConnectOptions::from_str(url)?
+    let mut options = SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
         .foreign_keys(true)
-        // NORMAL locking releases each read/write lease after the statement.
-        // That matters during a rolling replacement: the old and new
-        // processes can briefly share /data without either process retaining
-        // an exclusive SQLite lease for its full lifetime.
         .busy_timeout(StdDuration::from_secs(1));
+    if sqlite_file_path(url).is_some() {
+        // Azure Files does not reliably implement the POSIX byte-range locks
+        // used by SQLite's default Unix VFS. The dot-file VFS coordinates
+        // processes with an atomic sibling lock directory instead, preserving
+        // real locking during rolling overlap without a lifetime lease.
+        options = options.vfs("unix-dotfile");
+    }
     SqlitePoolOptions::new()
         // The mounted volume has one replica and this pool has exactly one
         // connection.  All ledger, demo, and rate-limit writes serialize on
@@ -1491,7 +1494,12 @@ mod tests {
         let initial_pool = create_pool(&url).await.unwrap();
         initial_pool.close().await;
 
-        let mut writer = SqliteConnection::connect(&url).await.unwrap();
+        let writer_options = SqliteConnectOptions::from_str(&url)
+            .unwrap()
+            .vfs("unix-dotfile");
+        let mut writer = SqliteConnection::connect_with(&writer_options)
+            .await
+            .unwrap();
         sqlx::query("BEGIN EXCLUSIVE")
             .execute(&mut writer)
             .await

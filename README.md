@@ -58,7 +58,7 @@ Configuration is environment-only:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port |
-| `DATABASE_URL` | `/data/internal-event-ledger/ledger-v2.sqlite3` in the image | Ledger SQLite location; rate-limit state shares this one database connection |
+| `DATABASE_URL` | `/data/internal-event-ledger/ledger-v2.sqlite3` in the image | Ledger SQLite location; rate-limit state shares this database and uses SQLite's cross-process dot-file locks |
 | `STATIC_DIR` | `dist` | Built frontend location |
 | `RUST_LOG` | JSON info logs | Tracing filter |
 | `ADMIN_TOKEN` | generated and persisted | Optional high-entropy override for administrative browser and API access |

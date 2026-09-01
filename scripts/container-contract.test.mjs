@@ -40,7 +40,7 @@ test('startup uses a fresh data directory, one connection, DELETE journals, and 
   assert.match(dockerfile, /internal-event-ledger\/ledger-v2\.sqlite3/);
 });
 
-test('the SQLite policy is one connection with a rollback DELETE journal and rolling-safe locks', async () => {
+test('the SQLite policy uses one connection and filesystem-safe rolling locks', async () => {
   const library = await readFile(new URL('../src/lib.rs', import.meta.url), 'utf8');
   const openPool = library.slice(library.indexOf('async fn open_pool'), library.indexOf('fn ensure_database_parent'));
   assert.match(library, /STORAGE_SUBDIRECTORY: &str = "internal-event-ledger"/);
@@ -50,8 +50,8 @@ test('the SQLite policy is one connection with a rollback DELETE journal and rol
   assert.match(library, /fs::rename\(&staged_path, database_path\)/);
   assert.doesNotMatch(library.slice(library.indexOf('pub async fn create_pool'), library.indexOf('async fn initialize_schema')), /execute\(&pool\)/);
   assert.match(library, /\.max_connections\(1\)/);
+  assert.match(openPool, /\.vfs\("unix-dotfile"\)/);
   assert.doesNotMatch(library, /SqliteLockingMode::Exclusive|locking_mode\s*\(/);
-  assert.match(library, /NORMAL locking releases each read\/write lease/);
   assert.doesNotMatch(library, /create_rate_limit_pool|rate_limit_database_url|clear_empty_database_journal/);
 });
 
