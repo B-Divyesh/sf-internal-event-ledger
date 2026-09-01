@@ -23,19 +23,23 @@ All checks passed on 2026-09-01 UTC from a clean `npm ci` install.
 - The claim registry passed all 14 exact commands, including offline demo reload/service-worker control, same-origin-only privacy capture, cache/response policy, demo expiry/isolation, exports, retention, ingest safety, and shared API rate limiting.
 - Mobile Lighthouse passed with Performance 99, Accessibility 100, Best Practices 100, SEO 100; FCP 1.3 s, LCP 2.1 s, TBT 0 ms, CLS 0. Raw report: `.factory/evidence/repair-10-local/lighthouse-mobile.json`.
 
-## Deployment
+## Deployment and live verification
 
-Deploy the committed repair with the work-order configuration only:
+The repair code commit `5c7523f15c39a5655051a7800f7719b313558420` was pushed to `main` and deployed through scoped ACR run `ch1sc` using the work-order configuration only:
 
 ```sh
 WO_DATA_DIR=/data /opt/fleet/lib/deploy-container.sh internal-event-ledger /work/repo Dockerfile 8080
 ```
 
-The container remains the same Rust/axum and Vite artifact class. It starts with only `PORT`, stores durable state under `/data/internal-event-ledger/`, runs non-root, and exposes `/health` with its build SHA. Live deployment identity is checked by comparing that SHA with the pushed commit.
+The public `/health` response returned `{"build":"5c7523f15c39a5655051a7800f7719b313558420","status":"ok"}`, exactly matching the pushed code commit. Two fresh live 390px `/demo` contexts held at the skeleton each exposed `role="status"` with the accessible name “Loading events”; Axe returned zero violations in both. `verify-url.sh` passed live with HTTP 200, the correct title, `lang=en`, one `h1`, a main landmark, complete image/button labels, and zero browser errors.
+
+Live PWA/privacy and response-policy smoke also passed: only `https://internal-event-ledger.sociobot.in` was requested, a service-worker-controlled offline reload retained five sample events with zero console errors, HTML and `sw.js` used `no-cache`, the hashed JavaScript asset was immutable, the demo API used `no-store`, and CSP/HSTS/no-sniff/frame/referrer/permissions headers were present.
+
+The container remains the same Rust/axum and Vite artifact class. It starts with only `PORT`, stores durable state under `/data/internal-event-ledger/`, runs non-root, and exposes `/health` with its build SHA.
 
 ## Evidence and known gaps
 
-- Local browser verification artifacts: `.factory/evidence/repair-10-local/`.
+- Local browser verification artifacts: `.factory/evidence/repair-10-local/`; public URL capture: `.factory/evidence/repair-10-live/`.
 - No local Docker/Podman/Buildah/Nerdctl executable was available. The factory ACR build and post-deploy health check provide the container proof.
 - No product gaps remain from verification 6. No other service, database, vault, storage share, or secret was read or changed.
 
