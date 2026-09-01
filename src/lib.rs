@@ -21,7 +21,7 @@ use sqlx::{
 use std::{
     collections::HashSet,
     fs::{self, OpenOptions},
-    io::{ErrorKind, Write},
+    io::{copy, ErrorKind, Write},
     net::IpAddr,
     path::{Path as FilePath, PathBuf},
     str::FromStr,
@@ -44,7 +44,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// the failed exclusive-lock revisions, and every later restart reuses it.
 /// The application never deletes or renames an earlier database.
 pub const STORAGE_SUBDIRECTORY: &str = "internal-event-ledger";
-pub const DATABASE_FILE_NAME: &str = "events.sqlite3";
+pub const DATABASE_FILE_NAME: &str = "ledger-v2.sqlite3";
 pub const STARTUP_MAX_ATTEMPTS: usize = 3;
 pub const STARTUP_RETRY_DELAY: StdDuration = StdDuration::from_secs(1);
 
@@ -175,30 +175,46 @@ impl AppState {
 }
 
 pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
+    ensure_database_parent(url).context("creating the SQLite storage directory")?;
+    let database_path = sqlite_file_path(url);
+    if let Some(path) = database_path.as_deref() {
+        if !path.exists() {
+            bootstrap_file_database(path).await.with_context(|| {
+                format!("creating a complete SQLite database at {}", path.display())
+            })?;
+        }
+    }
+
     let pool = open_pool(url)
         .await
         .context("opening the SQLite connection pool")?;
 
-    // A rolling deployment starts the new revision alongside the old one. Do
-    // not issue `CREATE … IF NOT EXISTS` against a ledger that is already
-    // initialized: SQLite treats that as a write and it can contend with the
-    // serving revision on the durable /data volume. New databases still get
-    // the complete schema before the application accepts requests.
+    // Never issue schema writes against a mounted database. Azure Files can
+    // return SQLITE_BUSY while SQLite upgrades a schema lock even when the
+    // file is new. File-backed databases are initialized on local container
+    // storage and copied into place only after SQLite has closed them.
     let initialized = async {
         if !table_exists(&pool, "sources")
             .await
             .context("checking whether the ledger schema exists")?
         {
-            sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
-                .execute(&pool)
-                .await
-                .context("creating the ledger schema")?;
-            sqlx::raw_sql(include_str!(
-                "../migrations/0002_shared_ephemeral_state.sql"
-            ))
-            .execute(&pool)
-            .await
-            .context("creating the demo and rate-limit schema")?;
+            if let Some(path) = database_path.as_deref() {
+                anyhow::bail!(
+                    "SQLite file exists without the ledger schema: {}",
+                    path.display()
+                );
+            }
+            initialize_schema(&pool).await?;
+        }
+        for table in [
+            "events",
+            "settings",
+            "request_rate_limits",
+            "demo_workspaces",
+        ] {
+            if !table_exists(&pool, table).await? {
+                anyhow::bail!("SQLite ledger is missing required table {table:?}");
+            }
         }
         Ok::<(), anyhow::Error>(())
     }
@@ -210,8 +226,79 @@ pub async fn create_pool(url: &str) -> anyhow::Result<SqlitePool> {
     Ok(pool)
 }
 
+async fn initialize_schema(pool: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
+        .execute(pool)
+        .await
+        .context("creating the ledger schema")?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0002_shared_ephemeral_state.sql"
+    ))
+    .execute(pool)
+    .await
+    .context("creating the demo and rate-limit schema")?;
+    Ok(())
+}
+
+async fn bootstrap_file_database(database_path: &FilePath) -> anyhow::Result<()> {
+    let bootstrap_id = Uuid::new_v4();
+    let local_path = std::env::temp_dir().join(format!(
+        "internal-event-ledger-bootstrap-{bootstrap_id}.sqlite3"
+    ));
+    let staged_path = database_path.with_file_name(format!(
+        ".{}.{}.bootstrap",
+        database_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("ledger"),
+        bootstrap_id
+    ));
+
+    let result = async {
+        let local_pool = open_pool(&sqlite_url(&local_path))
+            .await
+            .context("opening the local SQLite bootstrap file")?;
+        if let Err(error) = initialize_schema(&local_pool).await {
+            local_pool.close().await;
+            return Err(error);
+        }
+        local_pool.close().await;
+
+        // Write a complete closed database to a sibling staging file, sync it,
+        // then rename it into place. A crash can leave only a hidden staging
+        // file; it cannot expose a partial database at the configured path.
+        let mut source = fs::File::open(&local_path)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut staged = options.open(&staged_path)?;
+        copy(&mut source, &mut staged)?;
+        staged.sync_all()?;
+        drop(staged);
+        if database_path.exists() {
+            anyhow::bail!(
+                "SQLite database appeared while its bootstrap was being staged: {}",
+                database_path.display()
+            );
+        }
+        fs::rename(&staged_path, database_path)?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    let _ = fs::remove_file(&local_path);
+    let _ = fs::remove_file(format!("{}-journal", local_path.display()));
+    if result.is_err() {
+        let _ = fs::remove_file(&staged_path);
+    }
+    result
+}
+
 async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
-    ensure_database_parent(url)?;
     let options = SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
         .foreign_keys(true)
