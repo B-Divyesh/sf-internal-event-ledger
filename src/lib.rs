@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow},
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow},
     FromRow, Row, SqlitePool,
 };
 use std::{
@@ -43,7 +43,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// this revision away from a file which an earlier revision may still have
 /// locked on the durable share.  The application never deletes or renames
 /// that older file.
-pub const STORAGE_SUBDIRECTORY: &str = "internal-event-ledger-r8";
+pub const STORAGE_SUBDIRECTORY: &str = "internal-event-ledger-r9";
 pub const DATABASE_FILE_NAME: &str = "ledger.db";
 pub const STARTUP_MAX_ATTEMPTS: usize = 3;
 pub const STARTUP_RETRY_DELAY: StdDuration = StdDuration::from_secs(1);
@@ -208,10 +208,7 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
     let options = SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
         .foreign_keys(true)
-        .busy_timeout(StdDuration::from_secs(1))
-        // Azure Files is a mounted share, not a local disk.  Keep SQLite in
-        // the conservative rollback-journal mode requested for this service.
-        .journal_mode(SqliteJournalMode::Delete);
+        .busy_timeout(StdDuration::from_secs(1));
     let pool = SqlitePoolOptions::new()
         // The mounted volume has one replica and this pool has exactly one
         // connection.  All ledger, demo, and rate-limit writes serialize on
@@ -227,6 +224,17 @@ async fn open_pool(url: &str) -> anyhow::Result<SqlitePool> {
         })
         .connect_with(options)
         .await?;
+    // A newly created SQLite database defaults to the rollback DELETE journal.
+    // Read and verify that mode instead of issuing `PRAGMA journal_mode=DELETE`
+    // on every connection: changing a journal mode takes an exclusive lock and
+    // can itself fail on Azure Files while an earlier failed revision unwinds.
+    let journal_mode = sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
+        .fetch_one(&pool)
+        .await?;
+    if !journal_mode.eq_ignore_ascii_case("delete") {
+        pool.close().await;
+        anyhow::bail!("SQLite rollback DELETE journal is required, found {journal_mode:?}");
+    }
     Ok(pool)
 }
 
