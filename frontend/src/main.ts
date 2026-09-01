@@ -95,7 +95,7 @@ function inboxView():string {
     <div class="field"><label for="status-filter">Review state</label><select id="status-filter"><option value="active" ${state.status==='active'?'selected':''}>Active</option><option value="unread" ${state.status==='unread'?'selected':''}>Unread</option><option value="acknowledged" ${state.status==='acknowledged'?'selected':''}>Acknowledged</option><option value="archived" ${state.status==='archived'?'selected':''}>Archived</option><option value="all" ${state.status==='all'?'selected':''}>All events</option></select></div>
     <div class="actions"><button class="button" id="refresh">Refresh</button><button class="button" id="export-csv">Export CSV</button><button class="button" id="export-json">Export JSON</button></div>
   </div>`;
-  if(state.loading) return body+`<div class="event-list" aria-label="Loading events"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>`;
+  if(state.loading) return body+`<section class="event-list" role="status" aria-label="Loading events" aria-live="polite" aria-atomic="true"><span class="sr-only">Loading events</span><div class="skeleton" aria-hidden="true"></div><div class="skeleton" aria-hidden="true"></div><div class="skeleton" aria-hidden="true"></div></section>`;
   if(!state.events.length && !state.search && !state.selectedSource) return body+emptyState();
   if(!state.events.length) return body+`<section class="panel"><h2>No matching arrivals</h2><p>Adjust the search or review-state filter. The underlying record has not changed.</p><button class="button" id="clear-filters">Clear filters</button></section>`;
   const allSelected=state.events.every((e)=>state.selected.has(e.id));

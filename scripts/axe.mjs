@@ -28,7 +28,34 @@ async function scan(page, viewport, view) {
   });
 }
 
+async function scanDemoLoadingState(viewport) {
+  // Block the response after the server has created the isolated workspace.
+  // This keeps the real loading markup on screen long enough for Axe to scan
+  // it, instead of racing the sample data and only testing the settled view.
+  const context = await browser.newContext({ viewport, serviceWorkers: 'block' });
+  const page = await context.newPage();
+  let releaseDemoResponse;
+  const demoResponseHeld = new Promise((resolve) => { releaseDemoResponse = resolve; });
+  await page.route('**/api/demo', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const response = await route.fetch();
+    await demoResponseHeld;
+    await route.fulfill({ response });
+  });
+
+  try {
+    await page.goto(`${url}/demo`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('status', { name: 'Loading events' }).waitFor();
+    await scan(page, viewport, 'Demo loading state');
+  } finally {
+    releaseDemoResponse();
+    await context.close();
+  }
+}
+
 for (const viewport of viewports) {
+  await scanDemoLoadingState(viewport);
+
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
   await page.goto(url, { waitUntil: 'networkidle' });
