@@ -1,0 +1,61 @@
+{
+  "compatibilityPath": "/demo",
+  "banner": true,
+  "resetChanged": true,
+  "noHorizontalOverflow": true,
+  "labels": {
+    "ledgerSections": 1,
+    "sources": 2
+  },
+  "sourceSetup": true,
+  "registeredSources": true,
+  "focusedHeading": true,
+  "routeChecks": [
+    {
+      "route": "/demo/sources",
+      "status": 200,
+      "title": "Demo Sources — Internal Event Ledger",
+      "h1": 1,
+      "matchesTitle": true
+    },
+    {
+      "route": "/demo/digest",
+      "status": 200,
+      "title": "Demo Digest — Internal Event Ledger",
+      "h1": 1,
+      "matchesTitle": true
+    },
+    {
+      "route": "/demo/settings",
+      "status": 200,
+      "title": "Demo Settings — Internal Event Ledger",
+      "h1": 1,
+      "matchesTitle": true
+    }
+  ],
+  "sitemapRoutes": [
+    "/",
+    "/demo",
+    "/demo/sources",
+    "/demo/digest",
+    "/demo/settings",
+    "/inbox",
+    "/sources",
+    "/digest",
+    "/settings",
+    "/privacy",
+    "/terms"
+  ],
+  "storageAfterDemoExit": [],
+  "notFound": {
+    "status": 404,
+    "title": "Page not found — Internal Event Ledger",
+    "h1": 1,
+    "privacy": 1,
+    "terms": 1
+  },
+  "origins": [
+    "http://127.0.0.1:43123"
+  ],
+  "consoleErrorsBefore404": []
+}

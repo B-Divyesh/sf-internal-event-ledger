@@ -64,7 +64,7 @@ function layout(content:string):string {
         <span class="brand-mark" aria-hidden="true"><span>IEL</span></span>
         <span class="brand-copy">Internal event<small>Webhook review</small></span>
       </a>
-      <p class="nav-label">Control board</p>
+      <p class="nav-label">Ledger sections</p>
       <nav class="main-nav" aria-label="Ledger sections">
         ${nav('inbox',`Inbox${unread ? ` · ${unread}`:''}`)}
         ${nav('sources','Sources')}
@@ -72,7 +72,7 @@ function layout(content:string):string {
         ${nav('settings','Settings')}
       </nav>
       <div class="source-route">
-        <p class="nav-label">Incoming lines</p>
+        <p class="nav-label">Sources</p>
         <div class="source-list">
           <button class="source-filter ${state.selectedSource===''?'selected':''}" data-source=""><span class="route-dot"></span>All sources<span class="source-count">${state.sources.length}</span></button>
           ${state.sources.map((s) => `<button class="source-filter ${state.selectedSource===s.id?'selected':''}" data-source="${s.id}"><span class="route-dot"></span>${escapeHtml(s.name)}<span class="source-count">${s.unread_count}</span></button>`).join('')}
@@ -134,9 +134,9 @@ function eventRow(event:EventItem):string {
 }
 
 function sourcesView():string {
-  let body=pageHead('Routing office / 02','Incoming sources','Give each producer a private endpoint, signature policy, and redaction map.');
+  let body=pageHead('Source setup / 02','Incoming sources','Give each producer a private endpoint, signature policy, and redaction map.');
   if(state.credential) body+=`<section class="credential" role="status"><h2>Copy this token now</h2><p>For security, it will not be shown again. Send it as <code>X-Ledger-Token</code> or a Bearer token.</p><span class="field-label">Receiver URL</span><code>${escapeHtml(location.origin+state.credential.path)}</code><span class="field-label">Token</span><code>${escapeHtml(state.credential.token)}</code><button class="button" id="copy-curl">Copy cURL example</button></section>`;
-  body+=`<section class="panel"><div class="panel-head"><div><h2>Registered lines</h2><p>${state.sources.length} sources in service.</p></div></div>${state.sources.length?state.sources.map((s)=>`<div class="source-card"><div><h3><span class="route-code">/${escapeHtml(s.alias)}</span>${escapeHtml(s.name)}</h3><p>${s.event_count} groups · ${s.unread_count} unread · ${s.retention_days} day retention</p><p>Body redactions: ${escapeHtml(parseJson<string[]>(s.redact_paths,[]).join(', ')||'none')}</p></div><div class="actions"><button class="button danger" data-delete-source="${s.id}" data-source-name="${escapeHtml(s.name)}">Remove source</button></div></div>`).join(''):`<p>No sources are registered yet.</p>`}</section>`;
+  body+=`<section class="panel"><div class="panel-head"><div><h2>Registered sources</h2><p>${state.sources.length} sources in service.</p></div></div>${state.sources.length?state.sources.map((s)=>`<div class="source-card"><div><h3><span class="route-code">/${escapeHtml(s.alias)}</span>${escapeHtml(s.name)}</h3><p>${s.event_count} groups · ${s.unread_count} unread · ${s.retention_days} day retention</p><p>Body redactions: ${escapeHtml(parseJson<string[]>(s.redact_paths,[]).join(', ')||'none')}</p></div><div class="actions"><button class="button danger" data-delete-source="${s.id}" data-source-name="${escapeHtml(s.name)}">Remove source</button></div></div>`).join(''):`<p>No sources are registered yet.</p>`}</section>`;
   if(state.demoMode) return body+`<section class="panel demo-note"><h2>Sample sources are read-only</h2><p>Start for real to create private receiver endpoints on this deployment.</p><button class="button primary" data-start-real>Start for real</button></section>`;
   body+=`<section class="panel"><div class="panel-head"><div><h2>Add a source</h2><p>Tokens are generated locally by this server. A signing secret makes HMAC-SHA256 mandatory.</p></div></div>
     <form id="source-form" class="form-grid">
@@ -163,7 +163,7 @@ function settingsView():string {
   if(state.demoMode) return `${pageHead('Demo controls / 04','Demo settings','This sample cannot change server settings.')}<section class="panel"><h2>Use your own deployment</h2><p>Start for real to manage retention and exports.</p><button class="button primary" data-start-real>Start for real</button></section>`;
   let body=pageHead('Ledger controls / 04','Settings','Manage retention and privacy controls for this ledger.');
   body+=`<section class="panel"><div class="panel-head"><div><h2>Retention</h2><p>Remove event groups that are older than their source retention policy.</p></div></div><div class="actions"><button class="button danger" type="button" id="run-retention">Run retention now</button></div></section>`;
-  body+=`<section class="panel"><h2>Privacy controls</h2><p>Events stay in your SQLite database. Receiver credentials are stripped before headers are stored. Export remains available on every tier.</p><div class="actions"><button class="button" id="export-json">Export all JSON</button><a class="button" href="/privacy" data-legal="privacy">Read privacy policy</a></div></section>`;
+  body+=`<section class="panel"><h2>Privacy controls</h2><p>Events stay in your SQLite database. Receiver credentials are stripped before headers are stored. Export stays available.</p><div class="actions"><button class="button" id="export-json">Export all JSON</button><a class="button" href="/privacy" data-legal="privacy">Read privacy policy</a></div></section>`;
   return body;
 }
 

@@ -45,3 +45,20 @@ sentence exceeds 22 words. The banned-word scan found no matches.
 | Persistent product state | SQLite database |
 
 `Inbox` is only the navigation label.
+
+## Working interface labels
+
+The round-2 audit also checks working navigation and section labels. Visual
+transit details remain in the product's shapes and artwork, not its
+information architecture.
+
+| Text | Words | Result |
+| --- | ---: | --- |
+| Ledger sections | 2 | Pass |
+| Sources | 1 | Pass |
+| Source setup / 02 | 3 | Pass |
+| Incoming sources | 2 | Pass |
+| Registered sources | 2 | Pass |
+
+The regression test rejects the replaced labels “Control board,” “Incoming
+lines,” “Routing office / 02,” and “Registered lines.”

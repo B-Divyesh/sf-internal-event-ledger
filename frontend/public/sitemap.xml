@@ -2,6 +2,9 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://internal-event-ledger.sociobot.in/</loc></url>
   <url><loc>https://internal-event-ledger.sociobot.in/demo</loc></url>
+  <url><loc>https://internal-event-ledger.sociobot.in/demo/sources</loc></url>
+  <url><loc>https://internal-event-ledger.sociobot.in/demo/digest</loc></url>
+  <url><loc>https://internal-event-ledger.sociobot.in/demo/settings</loc></url>
   <url><loc>https://internal-event-ledger.sociobot.in/inbox</loc></url>
   <url><loc>https://internal-event-ledger.sociobot.in/sources</loc></url>
   <url><loc>https://internal-event-ledger.sociobot.in/digest</loc></url>

@@ -1,1 +1,1 @@
-Review low-priority webhook events in a self-hosted ledger.
+Review and retain low-priority webhook events in a self-hosted ledger.

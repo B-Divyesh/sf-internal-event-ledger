@@ -44,6 +44,7 @@ At 390px the sidebar becomes a compact masthead, secondary descriptions disappea
 - Event details open in place like unfolding a timetable, preserving context and keyboard order.
 - Acknowledge is immediate and reversible; archive requires a named confirmation when applied in bulk.
 - Toasts appear as small stamped notices in an `aria-live` region. Loading uses static route placeholders; empty and offline states always give a next step.
+- Transit history informs the geometry and artwork only. Working navigation uses literal labels such as “Ledger sections,” “Sources,” and “Source setup.”
 
 ## Motion policy
 

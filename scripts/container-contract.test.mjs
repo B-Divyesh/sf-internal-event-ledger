@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 
 const dockerfile = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8');
 const serverMain = await readFile(new URL('../src/main.rs', import.meta.url), 'utf8');
+const frontendMain = await readFile(new URL('../frontend/src/main.ts', import.meta.url), 'utf8');
 
 test('container build identity defaults safely and never reads git metadata', () => {
   const firstFrom = dockerfile.indexOf('FROM ');
@@ -63,7 +64,22 @@ test('site discovery and designed error documents ship in the frontend', async (
   const sitemap = await readFile(new URL('../frontend/public/sitemap.xml', import.meta.url), 'utf8');
   const notFound = await readFile(new URL('../frontend/public/404.html', import.meta.url), 'utf8');
   assert.match(robots, /Sitemap: https:\/\/internal-event-ledger\.sociobot\.in\/sitemap\.xml/);
-  for (const route of ['/', '/demo', '/privacy', '/terms']) assert.match(sitemap, new RegExp(`<loc>https://internal-event-ledger\\.sociobot\\.in${route.replace('/', '\\/')}`));
+  const expectedRoutes = [
+    '/', '/demo', '/demo/sources', '/demo/digest', '/demo/settings',
+    '/inbox', '/sources', '/digest', '/settings', '/privacy', '/terms',
+  ];
+  const sitemapRoutes = [...sitemap.matchAll(/<loc>https:\/\/internal-event-ledger\.sociobot\.in([^<]*)<\/loc>/g)]
+    .map((match) => match[1]);
+  assert.deepEqual(sitemapRoutes, expectedRoutes, 'sitemap must list every public and demo route exactly once');
   assert.match(notFound, /<h1>This page does not exist<\/h1>/);
   for (const value of ['name="description"', 'rel="canonical"', 'property="og:title"', 'name="twitter:card"', 'rel="apple-touch-icon"', 'href="/privacy"', 'href="/terms"']) assert.match(notFound, new RegExp(value));
+});
+
+test('working navigation uses direct functional labels', () => {
+  for (const label of ['Ledger sections', 'Sources', 'Source setup / 02', 'Registered sources']) {
+    assert.ok(frontendMain.includes(label), `missing direct working label: ${label}`);
+  }
+  for (const metaphor of ['Control board', 'Incoming lines', 'Routing office / 02', 'Registered lines']) {
+    assert.doesNotMatch(frontendMain, new RegExp(metaphor.replace('/', '\\/')));
+  }
 });
