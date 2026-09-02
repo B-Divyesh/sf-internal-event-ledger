@@ -72,9 +72,23 @@ Evidence from this repair:
 
 ## Deployment and post-deploy checks
 
-The production deployment and exact-SHA identity check are recorded after the
-cloud release is complete. The container uses the work-order durable `/data`
-mount and one replica for SQLite state.
+Released with the fleet container deployment for
+`sf-internal-event-ledger`. The container retains the work-order durable
+`/data` mount and one replica for SQLite state.
+
+- `/health` returned HTTP 200 with the full deployed source identity, and
+  `npm run verify:live-identity -- https://internal-event-ledger.sociobot.in
+  <release-sha>` passed.
+- The factory URL verifier returned HTTP 200 in 703 ms with zero browser
+  errors, one `<h1>`, a `main` landmark, `lang="en"`, and complete image and
+  button labels.
+- Public live Axe checks passed for loading, landing, and demo at desktop and
+  390 px with zero violations.
+- The deployed HTML's actual emitted JS and CSS both returned
+  `public, max-age=31536000, immutable`; `/`, `/privacy`, `/terms`, `sw.js`,
+  and all new application routes returned their expected responses.
+- A live 390 px browser check repeated `/demo → Privacy → Inbox`: the banner
+  and sample rows disappeared, and Inbox required the administrator token.
 
 ## Known gaps
 
