@@ -1,50 +1,44 @@
-# Internal Event Ledger — verification 9 handoff
+# Internal Event Ledger — repair 13 handoff
 
 ## Outcome
 
-**FAIL — do not release candidate
-`df710f7e6c5272e4d18a43403e52e25a15375068`.**
+Repaired the release-blocking findings recorded in
+[`verification-9.md`](verification-9.md) for candidate
+`df710f7e6c5272e4d18a43403e52e25a15375068`.
 
-The live deployment is the exact candidate and the core event-ledger workflow
-works. Release is blocked by two product-contract defects:
+Repair commit: `d4b303b0d7f909b4cdc670024073fea4be5c2acb`.
 
-1. The main built JavaScript asset receives `Cache-Control: public,
-   max-age=86400`, contradicting the registered immutable-cache claim. The
-   emitted filename contains an internal hyphen that the current detector does
-   not handle, and the claim test uses a nonrepresentative fixture name.
-2. `/demo` → Privacy removes the demo banner but retains sample state. Choosing
-   Inbox then displays five sample groups as `Receiver connected`, without the
-   mandatory sandbox label or discarding the demo.
+## What changed
 
-Medium findings are hash-only application routes and missing semantic footers
-on demo/legal routes. A low tooling finding is that bare `npm run test:e2e`
-needs an undocumented prestarted server.
+- Reproduced the reported cache failure before changing code: the candidate
+  emitted `/assets/index-BVE-f5_C.js`, which returned `Cache-Control: public,
+  max-age=86400`.
+- Vite now emits its manifest. The Rust server reads that manifest at startup
+  and applies one-year immutable caching only to the exact emitted JS/CSS
+  files. It never guesses from a filename, so URL-safe Vite hashes containing
+  `-` or `_` work correctly and ordinary static files retain conservative
+  caching.
+- Added unit coverage for the reported `index-BVE-f5_C.js` form, actual
+  release-manifest handling, CSS caching, conservative non-hashed caching,
+  and every real application route. The response-policy claim now discovers
+  all JS/CSS URLs in the built HTML and checks every emitted asset.
+- Replaced hash application routes with `/inbox`, `/sources`, `/digest`, and
+  `/settings`, plus `/demo`-scoped equivalents. The server, sitemap, history,
+  title, canonical URL, deep links, and back/forward handling support them.
+- Legal navigation now exits demo atomically: it deletes the ephemeral
+  workspace, removes `demo:internal-event-ledger:workspace`, clears sample
+  state, restores administrator access, and never renders sample records
+  without the demo banner. Direct non-demo navigation does the same.
+- Added semantic product footers to demo and legal routes, including Privacy,
+  Terms, Param Factory attribution, and build identity. Footer text uses the
+  high-contrast ink token on the deep paper surface.
+- `npm run test:e2e` now builds and starts its own isolated production-like
+  server by default. Passing an explicit URL or `SMOKE_URL` still tests an
+  existing server.
 
-Full evidence and exact reproduction details are in
-[verification-9.md](verification-9.md). Browser evidence is in
-`evidence/verification-9-live/verify-url/`.
+## Verification
 
-## Verification summary
-
-- All 14 exact `.factory/claims.json` commands passed individually, but the
-  response-policy test does not exercise the actual emitted JS filename.
-- `npm test` passed: 4 frontend, 8 Node contract/scope/identity, 21 Rust, 2
-  storage/restart, 14 claim, and 18 Axe view checks.
-- TypeScript, Rust format, Clippy with warnings denied, stamped frontend build,
-  and stamped release backend build passed.
-- Local production-like E2E passed at 1366 x 900 and 390 x 844.
-- Live identity returned the full candidate SHA, and live JS/CSS bytes matched
-  the clean stamped build.
-- Live demo search, review states, CSV/JSON export, reset, same-origin privacy,
-  offline reload, and mobile layout passed.
-- Live rate limits returned 429 with `Retry-After: 1`: management allowed 62 of
-  120 during measured refill; demo creation allowed 10 of 25.
-- Live Axe found zero violations. Mobile Lighthouse scored 97 performance and
-  100 for accessibility, best practices, and SEO; LCP 1.8 s, CLS 0, TBT 160 ms.
-- Docker tooling was unavailable in the verifier image; repository
-  container-contract tests passed.
-
-## Re-run
+Run from a clean checkout:
 
 ```sh
 npm ci
@@ -52,11 +46,38 @@ npm test
 npx tsc --noEmit
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
-VITE_BUILD_SHA=df710f7e6c5272e4d18a43403e52e25a15375068 npm run build
-BUILD_SHA=df710f7e6c5272e4d18a43403e52e25a15375068 cargo build --locked --release
-npm run verify:live-identity -- https://internal-event-ledger.sociobot.in df710f7e6c5272e4d18a43403e52e25a15375068
-PUBLIC_ONLY=1 node scripts/axe.mjs https://internal-event-ledger.sociobot.in
+npm run test:e2e
+VIEWPORT_WIDTH=1366 VIEWPORT_HEIGHT=900 npm run test:e2e
+npm run build
+cargo build --locked --release
 ```
 
-No product code, infrastructure, credentials, or out-of-scope resources were
-modified.
+Evidence from this repair:
+
+- `npm ci`: 60 packages, zero vulnerabilities.
+- `npm test`: 4 Vitest checks, 8 Node contract/scope/identity checks, 21 Rust
+  tests, 2 storage/restart tests, all 14 registered claim sandboxes, and 18
+  desktop/mobile Axe scans passed.
+- The cache claim inspects the release HTML's actual generated JS/CSS paths;
+  the isolated server returned `public, max-age=31536000, immutable` for each.
+- The `demo-isolation` claim reproduces `/demo → Privacy → Inbox`, asserts the
+  banner and storage namespace are gone, confirms no sample rows appear, and
+  confirms administrator access is required.
+- Bare E2E passed at 390×844 and 1366×900. It verifies keyboard skip-link
+  behavior, source creation/ingest/acknowledge/digest, semantic application
+  paths, legal and demo footers, and zero page/console errors.
+- Axe scanned loading, landing, inbox, sources, digest, settings, Privacy,
+  Terms, and demo at both sizes with zero WCAG A/AA, WCAG 2.1 AA, or
+  best-practice violations.
+
+## Deployment and post-deploy checks
+
+The production deployment and exact-SHA identity check are recorded after the
+cloud release is complete. The container uses the work-order durable `/data`
+mount and one replica for SQLite state.
+
+## Known gaps
+
+No local Docker/Podman/Buildah executable is available in this worker image.
+The Dockerfile contract is covered by repository tests; the fleet's ACR build
+is the container-build verification.
