@@ -204,7 +204,18 @@ function accessView():string {
 
 function bindAccess():void {
   document.querySelector('#try-demo')?.addEventListener('click',()=>void enterDemo());
-  document.querySelector<HTMLFormElement>('#admin-access-form')?.addEventListener('submit',(event)=>{event.preventDefault();const token=String(new FormData(event.currentTarget as HTMLFormElement).get('token')||'').trim();if(!token){state.error='Enter the administrator token.';render();return;}state.adminToken=token;state.accessRequired=false;state.error='';try{sessionStorage.setItem(ADMIN_TOKEN_KEY,token);}catch{/* current-tab access still works */}void refreshAll();render();});
+  document.querySelector<HTMLFormElement>('#admin-access-form')?.addEventListener('submit',(event)=>{event.preventDefault();void openLedger(event.currentTarget as HTMLFormElement);});
+}
+
+async function openLedger(form:HTMLFormElement):Promise<void>{
+  const token=String(new FormData(form).get('token')||'').trim();
+  if(!token){state.error='Enter the administrator token.';render();return;}
+  const submit=form.querySelector<HTMLButtonElement>('button[type=submit]');
+  if(submit){submit.disabled=true;submit.textContent='Opening…';}
+  state.adminToken=token;state.accessRequired=false;state.error='';state.loading=true;
+  try{sessionStorage.setItem(ADMIN_TOKEN_KEY,token);}catch{/* current-tab access still works */}
+  await refreshAll();
+  focusHeading();
 }
 
 function bind():void {
@@ -249,7 +260,7 @@ function navigate(view:View):void {
   if(view==='digest'&&!state.digest)void loadDigest().then(focusHeading);
 }
 
-async function refreshAll():Promise<void>{ if(state.demoMode){await loadEvents();return;}state.error='';await Promise.all([loadSources(false),loadEvents(false),loadSettings(false)]);render(); }
+async function refreshAll():Promise<void>{ if(state.demoMode){await loadEvents();return;}state.error='';await Promise.all([loadSources(false),loadSettings(false)]);await loadEvents(false); }
 
 async function loadSources(show=true):Promise<void>{ if(state.demoMode){if(show)render();return;}try{const data=await api<{sources:Source[]}>('/api/sources');state.sources=data.sources;}catch(error){state.error=messageFor(error);}if(show)render(); }
 
@@ -267,7 +278,7 @@ async function setStatus(ids:string[],status:string):Promise<void>{
 async function createSource(form:HTMLFormElement):Promise<void>{
   const submit=form.querySelector<HTMLButtonElement>('button[type=submit]')!;submit.disabled=true;submit.textContent='Creating…';const fd=new FormData(form);
   const payload={name:fd.get('name'),alias:fd.get('alias'),signing_secret:fd.get('signing_secret')||null,redact_headers:String(fd.get('redact_headers')||'').split(',').map((v)=>v.trim()).filter(Boolean),redact_paths:String(fd.get('redact_paths')||'').split(',').map((v)=>v.trim()).filter(Boolean),retention_days:Number(fd.get('retention_days'))};
-  try{const data=await api<{alias:string;token:string;ingest_path:string}>('/api/sources',{method:'POST',body:JSON.stringify(payload)});state.credential={alias:data.alias,token:data.token,path:data.ingest_path};await loadSources(false);render();toast('Endpoint created. Copy its token now.');}catch(error){state.error=messageFor(error);render();}
+  try{const data=await api<{alias:string;token:string;ingest_path:string}>('/api/sources',{method:'POST',body:JSON.stringify(payload)});state.credential={alias:data.alias,token:data.token,path:data.ingest_path};render();toast('Endpoint created. Copy its token now.');await loadSources(false);render();}catch(error){state.error=messageFor(error);render();}
 }
 
 async function deleteSource(id:string):Promise<void>{try{await api(`/api/sources/${id}`,{method:'DELETE'});state.credential=null;await Promise.all([loadSources(false),loadEvents(false)]);toast('Source and its events were removed.');}catch(error){state.error=messageFor(error);render();}}

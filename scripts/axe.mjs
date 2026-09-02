@@ -97,6 +97,7 @@ async function run() {
   let browser;
   const scans = [];
   const geometry = [];
+  let reflow;
 
   async function scan(page, viewport, view) {
     const results = await new AxeBuilder({ page })
@@ -168,6 +169,12 @@ async function run() {
       await demoPage.goto(`${server.baseUrl}/demo`, { waitUntil: 'networkidle' });
       await demoPage.getByRole('heading', { name: 'Event ledger' }).waitFor();
       await scan(demoPage, viewport, 'Demo');
+      if (viewport.name === 'mobile') {
+        geometry.push(...await demoPage.locator('label.check').evaluateAll((nodes) => nodes.map((node) => {
+          const rect = node.getBoundingClientRect();
+          return { text: node.textContent?.trim() || node.querySelector('input')?.getAttribute('aria-label') || 'event selection', width: rect.width, height: rect.height };
+        })));
+      }
       await demoContext.close();
 
       const missingContext = await browser.newContext({ viewport, serviceWorkers: 'block' });
@@ -177,15 +184,29 @@ async function run() {
       await scan(missingPage, viewport, '404');
       await missingContext.close();
     }
+
+    const reflowContext = await browser.newContext({ viewport: { width: 640, height: 844 }, serviceWorkers: 'block' });
+    const reflowPage = await reflowContext.newPage();
+    await reflowPage.goto(`${server.baseUrl}/demo`, { waitUntil: 'networkidle' });
+    await reflowPage.getByRole('heading', { name: 'Event ledger' }).waitFor();
+    await reflowPage.evaluate(() => { document.documentElement.style.zoom = '2'; });
+    await scan(reflowPage, { name: '200%-zoom' }, 'Demo reflow');
+    reflow = await reflowPage.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      actionRight: Math.max(...[...document.querySelectorAll('.event-side')].map((node) => node.getBoundingClientRect().right)),
+    }));
+    await reflowContext.close();
   } finally {
     if (browser) await browser.close();
     await server.cleanup();
   }
 
-  console.log(JSON.stringify({ url: server.baseUrl, localServer: server.localServer, publicOnly, scans, geometry }, null, 2));
+  console.log(JSON.stringify({ url: server.baseUrl, localServer: server.localServer, publicOnly, scans, geometry, reflow }, null, 2));
   const violations = scans.flatMap((scanResult) => scanResult.violations);
   const undersized = geometry.filter(({ width, height }) => width < 44 || height < 44);
-  if (violations.length || undersized.length) process.exitCode = 1;
+  const overflowsAt200Percent = !reflow || reflow.scrollWidth > reflow.clientWidth || reflow.actionRight > reflow.clientWidth;
+  if (violations.length || undersized.length || overflowsAt200Percent) process.exitCode = 1;
 }
 
 await run();

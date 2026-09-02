@@ -139,7 +139,7 @@ input::placeholder, textarea::placeholder { color: #677174; opacity: 1; }
 .button.danger { color: var(--signal-dark); border-color: var(--signal); }
 .button:disabled { cursor: not-allowed; opacity: .55; }
 .bulk-bar { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 10px; border-bottom: 2px solid var(--ink); }
-.check { width: 44px; height: 44px; display: inline-grid; place-items: center; }
+.check { width: 44px; min-width: 44px; height: 44px; flex: 0 0 44px; display: inline-grid; place-items: center; }
 .check input { width: 19px; min-height: 19px; height: 19px; accent-color: var(--signal); }
 .event-list { border-top: 4px solid var(--ink); background: rgba(255,250,240,.46); }
 .event-row { display: grid; grid-template-columns: 48px minmax(0,1fr) auto; border-bottom: 1px solid rgba(22,43,53,.28); animation: arrive 180ms ease-out both; }
@@ -214,6 +214,9 @@ input::placeholder, textarea::placeholder { color: #677174; opacity: 1; }
   .toolbar { grid-template-columns: 1fr 1fr; }
   .toolbar .search-field { grid-column: 1 / -1; }
   .toolbar .actions { grid-column: 1 / -1; }
+  .event-row { grid-template-columns: 44px minmax(0,1fr); }
+  .event-side { grid-column: 2; min-width: 0; padding: 0 8px 10px 0; justify-content: flex-start; flex-wrap: wrap; }
+  .event-detail { grid-column: 1 / -1; margin-left: 10px; }
   .empty { grid-template-columns: 1fr; }
   .empty img { height: 260px; grid-row: 1; }
   .empty-copy { grid-row: 2; }
@@ -234,9 +237,6 @@ input::placeholder, textarea::placeholder { color: #677174; opacity: 1; }
   .stat { flex: 1; }
   .toolbar, .form-grid { grid-template-columns: 1fr; }
   .toolbar > *, .form-grid .wide { grid-column: 1; }
-  .event-row { grid-template-columns: 42px minmax(0,1fr); }
-  .event-side { grid-column: 2; padding: 0 8px 10px 0; justify-content: flex-start; }
-  .event-detail { grid-column: 1 / -1; margin-left: 10px; }
   .event-meta .fingerprint { display: none; }
   .panel-head, .source-card { display: block; }
   .source-card .actions { margin-top: 12px; }

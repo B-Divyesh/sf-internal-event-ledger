@@ -356,10 +356,28 @@ claim('receiver-token-once', async () => {
   await page.getByLabel('Administrator token').fill(adminToken);
   await page.getByRole('button', { name: 'Open my ledger' }).click();
   await page.getByRole('link', { name: 'Sources', exact: true }).click();
+  await page.getByRole('heading', { name: 'Incoming sources' }).waitFor();
   await page.getByLabel('Source name').fill('One time token source');
   await page.getByLabel('Endpoint alias').fill('one-time-token-source');
+
+  // The one-time token is the POST result. A slow, unrelated source-list
+  // refresh must never prevent the operator from seeing or copying it.
+  let releaseSourceRefresh;
+  const sourceRefreshHeld = new Promise((resolve) => { releaseSourceRefresh = resolve; });
+  let holdSourceRefresh = true;
+  await page.route('**/api/sources', async (route) => {
+    if (holdSourceRefresh && route.request().method() === 'GET') await sourceRefreshHeld;
+    await route.continue();
+  });
   await page.getByRole('button', { name: 'Create endpoint' }).click();
-  const firstToken = await page.locator('.credential code').last().textContent();
+  const credential = page.locator('.credential');
+  try {
+    await credential.waitFor({ timeout: 2_000 });
+  } finally {
+    holdSourceRefresh = false;
+    releaseSourceRefresh();
+  }
+  const firstToken = await credential.locator('code').last().textContent();
   assert.match(firstToken || '', /^[a-f0-9]{48}$/);
   await page.reload({ waitUntil: 'networkidle' });
   assert.equal(await page.getByRole('heading', { name: 'Incoming sources' }).count(), 1);
