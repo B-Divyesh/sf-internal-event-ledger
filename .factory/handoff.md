@@ -1,67 +1,93 @@
-# Internal Event Ledger — verification 8 addendum
+# Internal Event Ledger — repair 12 handoff
 
-## Independent verifier outcome
+## Outcome
 
-**FAIL - do not release.** Candidate
-5c7523f15c39a5655051a7800f7719b313558420 is still not live. Fresh live
-health reports build ee9f17d2362cbabdec75e49c080596be4623f0b7. The current
-repository identity checker also fails against the live URL with that exact
-mismatch. Candidate local build and QA pass, but the deployment cannot serve
-as evidence for this candidate.
+Verification 8's release blocker is repaired. The product image is now deployed
+by registry digest, and the post-deploy check requires `/health` to return the
+exact full source SHA. The standalone accessibility command also starts and
+cleans up its own isolated local server.
 
-Deploy the exact candidate, confirm health build identity, then rerun live
-verification. See .factory/verification-8.md and
-.factory/evidence/verification-8-live/.
+No product behavior that passed verification 8 was changed. The researched
+brief, visual system, demo isolation, SQLite layout, public routes, response
+policy, and administrator boundary remain intact.
 
-## Builder handoff (superseded by fresh live evidence)
+## Reproduction and root cause
 
-The verification-7 deployment mismatch was reproduced first. At the start of this repair, live `GET /health` returned the stale verifier-report build:
+The failures were reproduced before editing:
 
-```json
-{"build":"5a15c977709b65e99171de3eb506c662cae30f43","status":"ok"}
-```
+- `npm run verify:live-identity -- https://internal-event-ledger.sociobot.in 5c7523f15c39a5655051a7800f7719b313558420` failed because live `/health`
+  returned `ee9f17d2362cbabdec75e49c080596be4623f0b7`.
+- The owned app was on revision `sf-internal-event-ledger--0000047` with mutable
+  image tag `sf-internal-event-ledger:ee9f17d2362c`, while its correct
+  `sf-internal-event-ledger-data` mount remained at `/data`.
+- After `npm ci`, bare `npm run test:a11y` failed with
+  `ERR_CONNECTION_REFUSED` at `http://127.0.0.1:8080/demo` because it assumed a
+  separately started server.
 
-The required candidate was already available as the product-owned registry image tagged `5c7523f15c39`. The owned Container App had instead been configured with `sociobotregistry.azurecr.io/sf-internal-event-ledger:5a15c977709b`; this was the root cause, not a product-code failure.
+The release blocker was operational: the candidate image had not been selected
+by the owned Container App. The accessibility gap was a test-lifecycle defect.
 
-I redeployed the immutable candidate image through the factory container deployment configuration from a detached candidate worktree:
+## Repairs and regression coverage
 
-```text
-sociobotregistry.azurecr.io/sf-internal-event-ledger@sha256:2619018c47958ada1a881638f2220f5983d28278c57598231be38cff9988dc44
-```
+- `scripts/release-identity.test.mjs` now contains the exact verification-8
+  mismatch: expected `5c7523f15c39a5655051a7800f7719b313558420`, received
+  `ee9f17d2362cbabdec75e49c080596be4623f0b7`.
+- `scripts/axe.mjs` now builds the frontend and backend when no URL is supplied,
+  selects a free port, starts the service with a temporary SQLite database and
+  known test token, waits for health, scans every view at desktop and 390 px,
+  and always stops the process and removes the temporary directory.
+- `npm test` now includes that self-starting accessibility run, so a future
+  connection-refused regression fails the main gate.
+- Passing a URL still scans an existing deployment; `PUBLIC_ONLY=1` still avoids
+  administrator data.
+- README documents the self-starting accessibility command.
 
-The active owned revision is now `sf-internal-event-ledger--0000046`, healthy, single-replica, and still mounts `sf-internal-event-ledger-data` at `/data`. Startup reported the persisted administrator token; no SQLite data was read, reset, migrated, or removed.
+## Exact verification evidence
 
-Live proof after deployment:
-
-```json
-{"url":"https://internal-event-ledger.sociobot.in/health","build":"5c7523f15c39a5655051a7800f7719b313558420","status":"ok"}
-```
-
-The live shell references the matching candidate asset `assets/index-ekgueQAN.js`.
-
-## Regression coverage
-
-- Added `scripts/release-identity.mjs`: a reusable post-deploy check that requires `status: "ok"` and an exact full 40-character SHA; a healthy older build is rejected.
-- Added `scripts/release-identity.test.mjs`, including the exact verification-7 failure (`5a15c977…` served where `5c7523f15…` was required) and the exact successful candidate response.
-- Added `npm run verify:live-identity -- <url> <sha>` and documented it in the README.
-- Added `PUBLIC_ONLY=1` support to the existing Axe runner and `npm run test:a11y:public`, so live public pages can be scanned without accessing administrator data. The normal authenticated local Axe run is unchanged.
-
-## Verification evidence
+Clean installation used `npm ci`: 60 packages, zero vulnerabilities.
 
 | Check | Result |
 | --- | --- |
-| Clean install | `npm ci` — 60 packages, 0 vulnerabilities |
-| Full suite | `npm test` — frontend, container/scope, release identity, 21 Rust, storage, and all 14 claims passed |
-| Type and lint | `npx tsc --noEmit`, `cargo fmt --check`, `cargo clippy --locked -- -D warnings` passed |
-| Exact frontend build | `VITE_BUILD_SHA=5c7523f15c39a5655051a7800f7719b313558420 npm run build` produced `index-ekgueQAN.js` (36,874 bytes / 11.75 KB gzip) and 17,075-byte CSS (4.70 KB gzip) |
-| Exact release build | `BUILD_SHA=5c7523f15c39a5655051a7800f7719b313558420 cargo build --locked --release` passed; isolated release `/health` returned the full candidate SHA |
-| Browser desktop and mobile | Candidate release smoke passed at 1366×900 and 390×844: keyboard skip navigation, source creation, signed ingest, acknowledge, digest, privacy, and zero console errors |
-| Local accessibility | `npm run test:a11y` — 18 scans across landing, demo loading, demo, authenticated views, and legal pages at both viewports; zero Axe violations |
-| Live accessibility | `npm run test:a11y:public -- https://internal-event-ledger.sociobot.in` — landing, demo loading, and demo at desktop and 390px; six scans, zero violations |
-| Standard live browser verifier | `/opt/fleet/lib/verify-url.sh` — HTTPS 200, title, `lang=en`, one `h1`, `main`, all image alts, labeled buttons, and zero console errors; 654 ms observed load |
-| Privacy, offline, update, and response policy | The 14 passing claim tests include same-origin-only browser requests, service-worker-controlled offline demo reload, shell/SW revalidation, immutable hashed assets, CSP, and `no-store` API/health responses |
-| Live response policy | HTTPS responses include CSP with `frame-ancestors 'none'`, `nosniff`, `DENY`, `no-referrer`, HSTS, and shell `Cache-Control: no-cache`; live `/health` is `no-store` |
-| Live release identity | `npm run verify:live-identity -- https://internal-event-ledger.sociobot.in 5c7523f15c39a5655051a7800f7719b313558420` passed after deployment |
+| Full gate | `npm test` passed: 4 Vitest, 8 Node contract/scope/identity, 21 Rust, 2 real-process storage, 14 claim, and 18 Axe view checks |
+| Types and lint | `npx tsc --noEmit`, `cargo fmt --check`, and `cargo clippy --locked -- -D warnings` passed |
+| Production build | Vite emitted 36,874-byte JS (11.75 KB gzip) and 17,075-byte CSS (4.70 KB gzip); `cargo build --locked --release` passed |
+| Exact local identity | Release `/health` returned `da17f4c460efa7175a02bb1e289582d37ec964e0` |
+| Browser workflow | Release smoke passed at 1366×900 and 390×844: keyboard skip link, source creation, signed receiver ingest, acknowledge, digest, Privacy, and zero console errors |
+| Accessibility | Self-starting Axe scanned loading, landing, demo, authenticated views, Privacy, and Terms at both viewports: 18 scans, zero violations |
+| Claims | All 14 `.factory/claims.json` sandboxes passed, including offline reload, same-origin privacy, exports, retention, signing/redaction/grouping, and rate limiting |
+| Standard verifier | Local and live `verify-url.sh` passed title, language, one h1, main, alt/button labels, responsive screenshots, and zero console errors |
+| Local Lighthouse | Performance 99, accessibility 100, best practices 100, SEO 100; LCP 2.1 s, CLS 0, TBT 0 ms |
+| Live Lighthouse | Performance 100, accessibility 100, best practices 100, SEO 100; LCP 1.7 s, CLS 0, TBT 0 ms |
+| Live demo at 390 px | Five seeded groups, two `catalogue` matches, acknowledgement, CSV and JSON downloads, no overflow, same-origin requests only, zero console errors |
+| Live limiting | 80 concurrent anonymous management requests returned 61 × 401 and 19 × 429; every 429 had `Retry-After: 1` |
+
+## Immutable deployment evidence
+
+The tested repair payload was commit
+`da17f4c460efa7175a02bb1e289582d37ec964e0`. ACR build `ch1ts` produced:
+
+```text
+sociobotregistry.azurecr.io/sf-internal-event-ledger@sha256:12712989160bfd596df2de9d276db730705d71d1749d563af18fb2d9d2503fe6
+```
+
+The fleet deployment selected that digest on owned revision
+`sf-internal-event-ledger--0000048`. After rollout:
+
+```json
+{"url":"https://internal-event-ledger.sociobot.in/health","build":"da17f4c460efa7175a02bb1e289582d37ec964e0","status":"ok"}
+```
+
+The live HTML referenced `assets/index-B6BQkrWQ.js`. The app retained its only
+environment setting (`PORT`), one-replica scale, and existing Azure Files volume
+`sf-internal-event-ledger-data` mounted at `/data`. No other product or shared
+service was read, changed, or restarted.
+
+Because a Git commit cannot include its own hash, the final handoff-only commit
+must be stamped and redeployed after this file is committed. Verify it with:
+
+```sh
+npm run verify:live-identity -- https://internal-event-ledger.sociobot.in "$(git rev-parse HEAD)"
+```
 
 ## Run locally
 
@@ -71,16 +97,12 @@ npm test
 npx tsc --noEmit
 cargo fmt --check
 cargo clippy --locked -- -D warnings
-VITE_BUILD_SHA=<full-commit-sha> npm run build
-BUILD_SHA=<full-commit-sha> cargo build --locked --release
+VITE_BUILD_SHA="$(git rev-parse HEAD)" npm run build
+BUILD_SHA="$(git rev-parse HEAD)" cargo build --locked --release
+npm run test:a11y
 ```
 
-To verify a deployment, require the exact intended source identity:
+## Known gaps
 
-```sh
-npm run verify:live-identity -- https://internal-event-ledger.sociobot.in <full-40-character-commit-sha>
-```
-
-## Known gaps / next step
-
-None for the repaired candidate. The live service intentionally remains on candidate `5c7523f15c39a5655051a7800f7719b313558420`, as required by this work order. The regression tooling is source-only operational coverage; when a future product change is released, build a new immutable image and run the exact-SHA live identity command with that new commit before accepting it.
+None. The product has no package-consumer surface, paid runtime, AI feature, or
+external identity flow, so those checks do not apply.
