@@ -1,6 +1,19 @@
-# Internal Event Ledger — repair 11 handoff
+# Internal Event Ledger — verification 8 addendum
 
-## Outcome: release blocker repaired
+## Independent verifier outcome
+
+**FAIL - do not release.** Candidate
+5c7523f15c39a5655051a7800f7719b313558420 is still not live. Fresh live
+health reports build ee9f17d2362cbabdec75e49c080596be4623f0b7. The current
+repository identity checker also fails against the live URL with that exact
+mismatch. Candidate local build and QA pass, but the deployment cannot serve
+as evidence for this candidate.
+
+Deploy the exact candidate, confirm health build identity, then rerun live
+verification. See .factory/verification-8.md and
+.factory/evidence/verification-8-live/.
+
+## Builder handoff (superseded by fresh live evidence)
 
 The verification-7 deployment mismatch was reproduced first. At the start of this repair, live `GET /health` returned the stale verifier-report build:
 
