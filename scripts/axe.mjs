@@ -3,6 +3,7 @@ import AxeBuilder from '@axe-core/playwright';
 
 const url = process.argv[2] || 'http://127.0.0.1:8080';
 const adminToken = process.env.ADMIN_TOKEN || 'ledger-test-admin';
+const publicOnly = process.env.PUBLIC_ONLY === '1';
 const executablePath = process.env.CHROMIUM_PATH;
 const browser = await chromium.launch(executablePath ? { executablePath } : {});
 const viewports = [{ name: 'desktop', width: 1366, height: 900 }, { name: 'mobile', width: 390, height: 844 }];
@@ -60,21 +61,23 @@ for (const viewport of viewports) {
   const page = await context.newPage();
   await page.goto(url, { waitUntil: 'networkidle' });
   await scan(page, viewport, 'Public landing');
-  await page.getByLabel('Administrator token').fill(adminToken);
-  await page.getByRole('button', { name: 'Open my ledger' }).click();
-  await page.getByRole('heading', { name: 'Event ledger' }).waitFor();
+  if (!publicOnly) {
+    await page.getByLabel('Administrator token').fill(adminToken);
+    await page.getByRole('button', { name: 'Open my ledger' }).click();
+    await page.getByRole('heading', { name: 'Event ledger' }).waitFor();
 
-  for (const view of views) {
-    if (view.button) await page.locator(`.main-nav [data-route="${view.name.toLowerCase()}"]`).click();
-    else await page.locator(`.sidebar-foot a[data-legal="${view.link.toLowerCase()}"]`).evaluate((node) => node.click());
-    await page.getByRole('heading', { name: view.heading }).waitFor();
-    await scan(page, viewport, view.name);
-    if (view.name === 'Inbox' && viewport.name === 'desktop') {
-      const links = await page.locator('.sidebar-foot a').evaluateAll((nodes) => nodes.map((node) => {
-        const rect = node.getBoundingClientRect();
-        return { text: node.textContent?.trim(), width: rect.width, height: rect.height };
-      }));
-      geometry.push(...links);
+    for (const view of views) {
+      if (view.button) await page.locator(`.main-nav [data-route="${view.name.toLowerCase()}"]`).click();
+      else await page.locator(`.sidebar-foot a[data-legal="${view.link.toLowerCase()}"]`).evaluate((node) => node.click());
+      await page.getByRole('heading', { name: view.heading }).waitFor();
+      await scan(page, viewport, view.name);
+      if (view.name === 'Inbox' && viewport.name === 'desktop') {
+        const links = await page.locator('.sidebar-foot a').evaluateAll((nodes) => nodes.map((node) => {
+          const rect = node.getBoundingClientRect();
+          return { text: node.textContent?.trim(), width: rect.width, height: rect.height };
+        }));
+        geometry.push(...links);
+      }
     }
   }
   await context.close();
@@ -88,7 +91,7 @@ for (const viewport of viewports) {
 }
 
 await browser.close();
-console.log(JSON.stringify({ url, scans, geometry }, null, 2));
+console.log(JSON.stringify({ url, publicOnly, scans, geometry }, null, 2));
 const violations = scans.flatMap((scanResult) => scanResult.violations);
 const undersized = geometry.filter(({ width, height }) => width < 44 || height < 44);
 if (violations.length || undersized.length) process.exit(1);

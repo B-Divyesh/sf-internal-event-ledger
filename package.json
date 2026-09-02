@@ -7,13 +7,16 @@
     "dev": "vite --host 0.0.0.0",
     "dev:server": "cargo run",
     "build": "vite build",
-    "test": "vitest run && node --test scripts/container-contract.test.mjs scripts/forbidden-resource.test.mjs && cargo test --locked && npm run test:storage && npm run test:claims",
+    "test": "vitest run && node --test scripts/container-contract.test.mjs scripts/forbidden-resource.test.mjs scripts/release-identity.test.mjs && cargo test --locked && npm run test:storage && npm run test:claims",
     "test:frontend": "vitest run",
     "test:forbidden-resources": "node --test scripts/forbidden-resource.test.mjs",
     "test:a11y": "node scripts/axe.mjs",
+    "test:a11y:public": "PUBLIC_ONLY=1 node scripts/axe.mjs",
     "test:e2e": "node scripts/smoke.mjs",
     "test:storage": "cargo build --locked && node --test scripts/startup-storage.test.mjs",
-    "test:claims": "npm run build && cargo build --locked && node --no-warnings scripts/claims.test.mjs"
+    "test:claims": "npm run build && cargo build --locked && node --no-warnings scripts/claims.test.mjs",
+    "test:release-identity": "node --test scripts/release-identity.test.mjs",
+    "verify:live-identity": "node scripts/release-identity.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",

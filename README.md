@@ -33,6 +33,12 @@ docker exec internal-event-ledger cat /data/internal-event-ledger/admin-token
 
 Release builds should pass the full source identity without relying on `.git`: `docker build --build-arg BUILD_SHA=<full-commit-sha> ...`.
 
+After deployment, prove that the public service is running the intended immutable release (a healthy earlier revision is not sufficient):
+
+```sh
+npm run verify:live-identity -- https://internal-event-ledger.sociobot.in <full-40-character-commit-sha>
+```
+
 ## Develop and verify
 
 Requirements: Node 22+, npm 10+, and Rust 1.88+.
