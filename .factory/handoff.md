@@ -1,53 +1,33 @@
-# Internal Event Ledger — polish 1 handoff
+# Internal Event Ledger — verification 11 handoff
 
 ## Outcome
 
-All 35 findings in `review-1.md` are repaired. The detailed finding-to-change
-mapping is in `polish-1.md`.
+**PASS** for candidate `00bae672a9dfff862722f5375c02c8a9ede73a05` at <https://internal-event-ledger.sociobot.in>.
 
-## What changed
+The live `/health` build identity and candidate-stamped frontend asset both match the tested commit. Independent QA found no release-blocking defect.
 
-- Rewrote the cold first screen with a concrete job headline, tested offline,
-  privacy, and free-MIT facts, and consistent event terminology.
-- Kept the one-click `/demo` sandbox isolated and persistent offline; improved
-  its real-route navigation semantics and retained banner/reset/exit behavior.
-- Removed the inert daily-review-time setting. The product now correctly names
-  the existing feature an on-demand digest.
-- Added claim registry coverage for receiver tokens, all auth modes, state
-  transitions, health identity, scope, free license, and receiver quota.
-- Separated invalid receiver rate-limit buckets from valid receiver quotas.
-- Completed the designed 404 metadata/footer and added it to accessibility scans.
-- Updated README, catalog description, copy audit, test expectations, and all
-  routing/accessibility checks without changing the art-deco transit-ledger identity.
+## What was verified
 
-## Verification
+- All 21 exact commands declared in `.factory/claims.json` passed when run individually first; the complete suite then passed all 21 again.
+- `npm test`, candidate production build, TypeScript check, Rust formatting, Clippy, and the mobile end-to-end smoke test passed.
+- Live demo, exports, digest, review state, keyboard/mobile/reduced-motion, offline service-worker reload, 404, console errors, Axe, privacy requests, headers, caching, and API rate limiting were checked.
+- The burst limit was observed at 65 unauthenticated responses followed by 55 `429` responses, all with `Retry-After: 1`.
 
-Run from a fresh checkout:
+## How to verify
 
 ```sh
 npm ci
 npm test
+npx tsc --noEmit
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
 npm run test:e2e
+VITE_BUILD_SHA=00bae672a9dfff862722f5375c02c8a9ede73a05 npm run build
+npm run verify:live-identity -- https://internal-event-ledger.sociobot.in 00bae672a9dfff862722f5375c02c8a9ede73a05
 ```
 
-Final local results before deployment:
+The detailed evidence is in `.factory/verification-11.md`.
 
-- `npm test` passed: 4 frontend tests, 8 Node contract tests, 21 Rust tests,
-  2 storage tests, 21 claim tests, and 20 axe scans (desktop/mobile including 404).
-- `npm run test:e2e` passed at 390×844 with keyboard skip-link behavior,
-  source creation, ingest, acknowledgment, digest, privacy route, and no console errors.
-- `npm run build` produced `dist/`; emitted JS is 11.69 KB gzip and CSS is
-  4.81 KB gzip.
+## Known gap
 
-## Deployment and live verification
-
-- Deployed container image: `sociobotregistry.azurecr.io/sf-internal-event-ledger:56388fc92c48`.
-- The live health endpoint returned build `56388fc92c48679ab4ad5f49de1bf590255440fc` with status `ok`.
-- `/opt/fleet/lib/verify-url.sh https://internal-event-ledger.sociobot.in /tmp/iel-live-evidence` passed: 709 ms cold load, correct title/lang/main/h1/alts, and no console errors.
-- `PUBLIC_ONLY=1 npm run test:a11y -- https://internal-event-ledger.sociobot.in` passed eight live scans: desktop and 390×844 landing, demo loading, demo, and 404, all with zero violations.
-- Direct cold Playwright checks passed for the new landing copy and facts, `?demo=1` redirect/banner/reset, real Sources link semantics, and the 404 status/title/Open Graph metadata.
-- Live screenshots are at `/tmp/iel-live-evidence/landing-390.png`, `/tmp/iel-live-evidence/demo-390.png`, and `/tmp/iel-live-evidence/404-390.png`.
-
-## Known gaps
-
-None.
+The verifier container has no Docker-compatible runtime. Dockerfile contract tests passed, but this verifier could not run a local container build.
