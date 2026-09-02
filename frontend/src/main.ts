@@ -10,7 +10,8 @@ type DemoWorkspace = { workspace_id:string; expires_in_seconds:number; digest_ho
 const ADMIN_TOKEN_KEY = 'iel:admin-token';
 const DEMO_KEY = 'demo:internal-event-ledger:workspace';
 const BUILD_SHA = __BUILD_SHA__;
-const startsInDemo = location.pathname === '/demo' || new URLSearchParams(location.search).get('demo') === '1';
+const APP_VIEWS = ['inbox','sources','digest','settings'] as const;
+const startsInDemo = isDemoRoute() || new URLSearchParams(location.search).get('demo') === '1';
 const state = {
   view: routeView(), sources: [] as Source[], events: [] as EventItem[], digest: null as Digest|null,
   selectedSource: '', status: 'active', search: '', loading: true, error: '', online: navigator.onLine,
@@ -25,8 +26,16 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 function routeView(): View {
   if (location.pathname === '/privacy') return 'privacy';
   if (location.pathname === '/terms') return 'terms';
-  const hash = location.hash.slice(1);
-  return ['inbox','sources','digest','settings'].includes(hash) ? hash as View : 'inbox';
+  const path = isDemoRoute() ? location.pathname.slice('/demo'.length) : location.pathname;
+  const view = path.replace(/^\/+/, '');
+  return APP_VIEWS.includes(view as typeof APP_VIEWS[number]) ? view as View : 'inbox';
+}
+
+function isDemoRoute(path=location.pathname):boolean { return path === '/demo' || path.startsWith('/demo/'); }
+function routeUrl(view:View):string {
+  if (isPublicLegalView(view)) return `/${view}`;
+  if (!state.demoMode) return `/${view}`;
+  return view === 'inbox' ? '/demo' : `/demo/${view}`;
 }
 
 async function api<T>(url:string, options?:RequestInit):Promise<T> {
@@ -51,7 +60,7 @@ function layout(content:string):string {
   const demoBanner = state.demoMode ? `<div class="demo-banner" role="status"><strong>Demo — sample data, nothing is saved to your real ledger</strong><span>Workspace ${escapeHtml(state.demoId.slice(0,8))}</span><div class="actions"><button class="button" id="reset-demo">Reset demo</button><button class="button demo-exit" data-start-real>Start for real</button></div></div>` : '';
   return `<div class="${state.demoMode?'demo-mode':''}">${demoBanner}<div class="shell">
     <aside class="sidebar" aria-label="Product navigation">
-      <a class="brand" href="/#inbox" data-route="inbox" aria-label="Internal Event Ledger home">
+      <a class="brand" href="${routeUrl('inbox')}" data-route="inbox" aria-label="Internal Event Ledger home">
         <span class="brand-mark" aria-hidden="true"><span>IEL</span></span>
         <span class="brand-copy">Internal event<small>Central ledger</small></span>
       </a>
@@ -74,9 +83,14 @@ function layout(content:string):string {
     <div class="workspace">
       <header class="topbar"><span class="connection ${state.online?'':'offline'}">${state.online?(state.demoMode?'Sample ledger ready':'Receiver connected'):'Offline — showing last view'}</span><span class="clock">${new Intl.DateTimeFormat('en',{dateStyle:'medium',timeStyle:'short'}).format(new Date())}</span></header>
       <main id="main" tabindex="-1">${state.error?`<div class="notice" role="alert">${escapeHtml(state.error)} <button class="button quiet" id="retry">Try again</button></div>`:''}${content}</main>
+      ${appFooter()}
     </div>
     <div class="toast-region" aria-live="polite" aria-atomic="true"></div>
   </div></div>`;
+}
+
+function appFooter():string {
+  return `<footer class="app-footer"><p>Review operational events in a self-hosted ledger.</p><nav aria-label="Product footer"><a href="${routeUrl('inbox')}" data-route="inbox">Inbox</a><a href="/privacy" data-legal="privacy">Privacy</a><a href="/terms" data-legal="terms">Terms</a><span>Built by Param Factory</span></nav><small>Build ${escapeHtml(BUILD_SHA.slice(0,12))} · Poster artwork generated for Internal Event Ledger.</small></footer>`;
 }
 
 function nav(view:View,label:string):string { return `<button class="nav-button ${state.view===view?'active':''}" data-route="${view}" ${state.view===view?'aria-current="page"':''}>${escapeHtml(label)}</button>`; }
@@ -196,7 +210,7 @@ function bindAccess():void {
 function bind():void {
   document.querySelectorAll<HTMLElement>('[data-route]').forEach((el)=>el.addEventListener('click',(event)=>{event.preventDefault();navigate(el.dataset.route as View);}));
   document.querySelectorAll<HTMLElement>('[data-legal]').forEach((el)=>el.addEventListener('click',(event)=>{event.preventDefault();navigate(el.dataset.legal as View);}));
-  document.querySelectorAll<HTMLButtonElement>('[data-source]').forEach((el)=>el.addEventListener('click',()=>{state.selectedSource=el.dataset.source||'';state.view='inbox';void loadEvents();}));
+  document.querySelectorAll<HTMLButtonElement>('[data-source]').forEach((el)=>el.addEventListener('click',()=>{state.selectedSource=el.dataset.source||'';if(state.view!=='inbox'){state.view='inbox';history.pushState({},'',routeUrl('inbox'));render();focusHeading();}void loadEvents();}));
   document.querySelector('#retry')?.addEventListener('click',()=>void refreshAll());
   document.querySelector('#refresh')?.addEventListener('click',()=>void loadEvents(true));
   document.querySelector('#export-csv')?.addEventListener('click',()=>void exportEvents('csv'));
@@ -227,10 +241,10 @@ function bind():void {
 }
 
 function navigate(view:View):void {
+  if(state.demoMode&&isPublicLegalView(view))discardDemo();
   state.view=view; state.error='';
-  if(view==='privacy'||view==='terms')state.demoMode=false;
-  const url=view==='privacy'||view==='terms'?`/${view}`:`${state.demoMode?'/demo':'/'}#${view}`;
-  history.pushState({},'',url); render();
+  if(isPublicLegalView(view)){state.demoMode=false;state.accessRequired=!state.adminToken;}
+  history.pushState({},'',routeUrl(view)); render();
   focusHeading();
   if(view==='digest'&&!state.digest)void loadDigest().then(focusHeading);
 }
@@ -275,8 +289,8 @@ function csvCell(value:unknown):string{return `"${String(value??'').replaceAll('
 function demoCsv(events:EventItem[]):string{return ['id,source,type,summary,status,occurrences,first_seen,last_seen,fingerprint',...events.map((event)=>[event.id,event.source_name,event.event_type,event.summary,event.status,event.occurrence_count,event.received_at,event.last_seen_at,event.fingerprint].map(csvCell).join(','))].join('\n')+'\n';}
 
 async function enterDemo():Promise<void>{history.pushState({},'','/demo');state.demoMode=true;state.accessRequired=false;state.view='inbox';state.error='';state.loading=true;render();await provisionDemo();focusHeading();}
-async function resetDemo():Promise<void>{const previous=state.demoId;localStorage.removeItem(DEMO_KEY);state.loading=true;state.error='';render();if(previous)void fetch(`/api/demo/${encodeURIComponent(previous)}`,{method:'DELETE'});await provisionDemo();toast('The sample workspace was reset.');}
-async function startForReal():Promise<void>{const previous=state.demoId;if(previous)void fetch(`/api/demo/${encodeURIComponent(previous)}`,{method:'DELETE',keepalive:true});localStorage.removeItem(DEMO_KEY);state.demoMode=false;state.demoId='';state.demoEvents=[];state.sources=[];state.events=[];state.digest=null;state.search='';state.selectedSource='';state.status='active';state.accessRequired=!state.adminToken;history.pushState({},'','/');if(state.accessRequired){render();focusHeading();return;}await refreshAll();focusHeading();}
+async function resetDemo():Promise<void>{const previous=state.demoId;removeStoredDemo();state.loading=true;state.error='';render();if(previous)void fetch(`/api/demo/${encodeURIComponent(previous)}`,{method:'DELETE'});await provisionDemo();toast('The sample workspace was reset.');}
+async function startForReal():Promise<void>{discardDemo();state.demoMode=false;state.accessRequired=!state.adminToken;history.pushState({},'','/');if(state.accessRequired){render();focusHeading();return;}await refreshAll();focusHeading();}
 
 async function provisionDemo():Promise<void>{
   try{const response=await fetch('/api/demo',{method:'POST'});if(!response.ok)throw new Error('The sample workspace could not be created. Try again.');applyDemo(await response.json() as DemoWorkspace,Date.now());persistDemo();await loadEvents();}
@@ -286,7 +300,10 @@ async function provisionDemo():Promise<void>{
 function applyDemo(workspace:DemoWorkspace,startedAt:number):void{state.demoId=workspace.workspace_id;state.demoStartedAt=startedAt;state.sources=workspace.sources;state.demoEvents=workspace.events;state.digestHour=workspace.digest_hour;state.loading=false;state.error='';refreshDemoSourceCounts();}
 function refreshDemoSourceCounts():void{state.sources=state.sources.map((source)=>{const events=state.demoEvents.filter((event)=>event.source_id===source.id);return {...source,event_count:events.length,unread_count:events.filter((event)=>event.status==='unread').length};});}
 function persistDemo():void{try{localStorage.setItem(DEMO_KEY,JSON.stringify({saved_at:state.demoStartedAt,workspace:{workspace_id:state.demoId,expires_in_seconds:86400,digest_hour:state.digestHour,sources:state.sources,events:state.demoEvents}}));}catch{/* the online demo still works when browser storage is unavailable */}}
-function restoreCachedDemo():boolean{try{const cached=JSON.parse(localStorage.getItem(DEMO_KEY)||'null') as null|{saved_at:number;workspace:DemoWorkspace};if(!cached||Date.now()-cached.saved_at>=86_400_000){localStorage.removeItem(DEMO_KEY);return false;}applyDemo(cached.workspace,cached.saved_at);return true;}catch{localStorage.removeItem(DEMO_KEY);return false;}}
+function removeStoredDemo():void{try{localStorage.removeItem(DEMO_KEY);}catch{/* the in-memory sample can still be discarded */}}
+function cachedDemoId():string{try{return (JSON.parse(localStorage.getItem(DEMO_KEY)||'null') as {workspace?:DemoWorkspace}|null)?.workspace?.workspace_id||'';}catch{return '';}}
+function discardDemo():void{const previous=state.demoId||cachedDemoId();if(previous)void fetch(`/api/demo/${encodeURIComponent(previous)}`,{method:'DELETE',keepalive:true});removeStoredDemo();state.demoId='';state.demoStartedAt=0;state.demoEvents=[];state.sources=[];state.events=[];state.digest=null;state.search='';state.selectedSource='';state.status='active';state.openEvent='';state.selected.clear();state.loading=false;}
+function restoreCachedDemo():boolean{try{const cached=JSON.parse(localStorage.getItem(DEMO_KEY)||'null') as null|{saved_at:number;workspace:DemoWorkspace};if(!cached||Date.now()-cached.saved_at>=86_400_000){removeStoredDemo();return false;}applyDemo(cached.workspace,cached.saved_at);return true;}catch{removeStoredDemo();return false;}}
 
 function focusHeading():void{
   const heading=document.querySelector<HTMLElement>('h1');
@@ -298,9 +315,10 @@ function focusHeading():void{
 }
 
 function updatePageMetadata():void{
-  const title=state.demoMode?'Demo — Internal Event Ledger':state.view==='privacy'?'Privacy — Internal Event Ledger':state.view==='terms'?'Terms — Internal Event Ledger':state.accessRequired?'Internal Event Ledger — review webhook events':`${state.view[0].toUpperCase()+state.view.slice(1)} — Internal Event Ledger`;
+  const demoTitle=state.view==='inbox'?'Demo — Internal Event Ledger':`Demo ${state.view[0].toUpperCase()+state.view.slice(1)} — Internal Event Ledger`;
+  const title=state.demoMode?demoTitle:state.view==='privacy'?'Privacy — Internal Event Ledger':state.view==='terms'?'Terms — Internal Event Ledger':state.accessRequired?'Internal Event Ledger — review webhook events':`${state.view[0].toUpperCase()+state.view.slice(1)} — Internal Event Ledger`;
   document.title=title;
-  const canonical=document.querySelector<HTMLLinkElement>('link[rel="canonical"]');if(canonical)canonical.href=`${location.origin}${state.demoMode?'/demo':isPublicLegalView(state.view)?`/${state.view}`:'/'}`;
+  const canonical=document.querySelector<HTMLLinkElement>('link[rel="canonical"]');if(canonical)canonical.href=`${location.origin}${state.demoMode||isPublicLegalView(state.view)?routeUrl(state.view):state.accessRequired?'/':'/'+state.view}`;
 }
 
 function toast(message:string):void{const region=document.querySelector('.toast-region');if(!region)return;const node=document.createElement('div');node.className='toast';node.textContent=message;region.append(node);setTimeout(()=>node.remove(),3600);}
@@ -309,15 +327,21 @@ function stored(key:string):string|null{try{return localStorage.getItem(key);}ca
 function save(key:string,value:string):void{try{localStorage.setItem(key,value);}catch{/* private mode: free app remains usable */}}
 
 window.addEventListener('popstate',()=>{
-  state.view=routeView();state.demoMode=location.pathname==='/demo';state.accessRequired=!state.demoMode&&!state.adminToken;render();focusHeading();
-  if(state.view==='digest'&&!state.digest)void loadDigest().then(focusHeading);
+  const nextDemoMode=isDemoRoute();
+  if(state.demoMode&&!nextDemoMode)discardDemo();
+  state.view=routeView();state.demoMode=nextDemoMode;state.accessRequired=!state.demoMode&&!state.adminToken;
+  if(state.demoMode&&!state.demoId){const restored=restoreCachedDemo();state.loading=!restored;render();if(restored)void loadEvents();else if(state.online)void provisionDemo();else{state.loading=false;state.error='The sample is not cached yet. Reconnect once to load it.';render();}}else{render();if(state.view==='digest'&&!state.digest)void loadDigest().then(focusHeading);}
+  focusHeading();
 });
 window.addEventListener('online',()=>{state.online=true;if(state.demoMode&&!state.demoId)void provisionDemo();else void refreshAll();});
 window.addEventListener('offline',()=>{state.online=false;render();});
 
 async function start():Promise<void>{
   if('serviceWorker' in navigator)registerServiceWorker();
-  if(startsInDemo){if(location.pathname!=='/demo')history.replaceState({},'','/demo');state.view=routeView();state.demoMode=true;state.accessRequired=false;const restored=restoreCachedDemo();render();if(!restored){if(state.online)await provisionDemo();else{state.loading=false;state.error='The sample is not cached yet. Reconnect once to load it.';render();}}else await loadEvents();if(state.view==='digest')await loadDigest();return;}
+  if(startsInDemo){if(new URLSearchParams(location.search).get('demo')==='1')history.replaceState({},'','/demo');state.view=routeView();state.demoMode=true;state.accessRequired=false;const restored=restoreCachedDemo();render();if(!restored){if(state.online)await provisionDemo();else{state.loading=false;state.error='The sample is not cached yet. Reconnect once to load it.';render();}}else await loadEvents();if(state.view==='digest')await loadDigest();return;}
+  // Any non-demo route is an explicit exit from the sandbox, including a
+  // direct address-bar visit or a normal browser navigation to a legal page.
+  discardDemo();
   render();
   if(state.accessRequired)return;
   if(!state.online){state.loading=false;state.error='You are offline. Reconnect to refresh the ledger.';render();return;}

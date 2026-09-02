@@ -9,6 +9,9 @@ export default defineConfig({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
+    // The server reads this manifest to identify exactly which Vite-emitted
+    // files are content-addressed and safe to cache forever.
+    manifest: true,
     target: 'es2022',
     sourcemap: false,
   },

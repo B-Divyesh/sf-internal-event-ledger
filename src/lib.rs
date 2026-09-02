@@ -404,6 +404,7 @@ pub fn is_database_locked(error: &anyhow::Error) -> bool {
 
 pub fn app(state: AppState, static_dir: PathBuf) -> Router {
     let index = static_dir.join("index.html");
+    let static_cache_policy = StaticCachePolicy::from_vite_manifest(&static_dir);
     let ingest_routes = Router::new()
         .route("/ingest/{alias}", post(ingest))
         .route_layer(middleware::from_fn_with_state(
@@ -436,6 +437,14 @@ pub fn app(state: AppState, static_dir: PathBuf) -> Router {
         .nest("/api", api)
         .route_service("/", ServeFile::new(index.clone()))
         .route_service("/demo", ServeFile::new(index.clone()))
+        .route_service("/demo/inbox", ServeFile::new(index.clone()))
+        .route_service("/demo/sources", ServeFile::new(index.clone()))
+        .route_service("/demo/digest", ServeFile::new(index.clone()))
+        .route_service("/demo/settings", ServeFile::new(index.clone()))
+        .route_service("/inbox", ServeFile::new(index.clone()))
+        .route_service("/sources", ServeFile::new(index.clone()))
+        .route_service("/digest", ServeFile::new(index.clone()))
+        .route_service("/settings", ServeFile::new(index.clone()))
         .route_service("/privacy", ServeFile::new(index.clone()))
         .route_service("/terms", ServeFile::new(index.clone()))
         .route_service("/robots.txt", ServeFile::new(static_dir.join("robots.txt")))
@@ -466,10 +475,68 @@ pub fn app(state: AppState, static_dir: PathBuf) -> Router {
         .fallback(not_found)
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(256 * 1024))
-        .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn_with_state(
+            static_cache_policy,
+            security_headers,
+        ))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+#[derive(Clone, Debug, Default)]
+struct StaticCachePolicy {
+    immutable_assets: Arc<HashSet<String>>,
+}
+
+impl StaticCachePolicy {
+    /// Vite's URL-safe base64 hashes can contain `-` and `_`, so parsing a
+    /// filename is both brittle and capable of marking an ordinary file as
+    /// immutable. The generated manifest is the build's source of truth.
+    fn from_vite_manifest(static_dir: &FilePath) -> Self {
+        let manifest_path = static_dir.join(".vite/manifest.json");
+        let Ok(contents) = fs::read_to_string(&manifest_path) else {
+            warn!(path = %manifest_path.display(), "Vite manifest unavailable; static files use the conservative cache policy");
+            return Self::default();
+        };
+        let Ok(manifest) = serde_json::from_str::<Value>(&contents) else {
+            warn!(path = %manifest_path.display(), "Vite manifest could not be parsed; static files use the conservative cache policy");
+            return Self::default();
+        };
+
+        let mut immutable_assets = HashSet::new();
+        let Some(entries) = manifest.as_object() else {
+            warn!(path = %manifest_path.display(), "Vite manifest has an unexpected shape; static files use the conservative cache policy");
+            return Self::default();
+        };
+        for entry in entries.values() {
+            for field in ["file", "assets"] {
+                match entry.get(field) {
+                    Some(Value::String(asset)) => {
+                        immutable_assets.insert(format!("/{asset}"));
+                    }
+                    Some(Value::Array(assets)) => {
+                        for asset in assets.iter().filter_map(Value::as_str) {
+                            immutable_assets.insert(format!("/{asset}"));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(stylesheets) = entry.get("css").and_then(Value::as_array) {
+                for stylesheet in stylesheets.iter().filter_map(Value::as_str) {
+                    immutable_assets.insert(format!("/{stylesheet}"));
+                }
+            }
+        }
+        Self {
+            immutable_assets: Arc::new(immutable_assets),
+        }
+    }
+
+    fn is_immutable(&self, path: &str) -> bool {
+        self.immutable_assets.contains(path)
+    }
 }
 
 async fn not_found() -> impl IntoResponse {
@@ -479,7 +546,11 @@ async fn not_found() -> impl IntoResponse {
     )
 }
 
-async fn security_headers(req: Request<Body>, next: Next) -> Response {
+async fn security_headers(
+    State(static_cache_policy): State<StaticCachePolicy>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let path = req.uri().path().to_owned();
     let mut response = next.run(req).await;
     let is_html = response
@@ -512,7 +583,7 @@ async fn security_headers(req: Request<Body>, next: Next) -> Response {
         "no-store"
     } else if path == "/sw.js" || path == "/" || path == "/privacy" || path == "/terms" || is_html {
         "no-cache"
-    } else if is_hashed_asset(&path) {
+    } else if static_cache_policy.is_immutable(&path) {
         "public, max-age=31536000, immutable"
     } else {
         "public, max-age=86400"
@@ -522,22 +593,6 @@ async fn security_headers(req: Request<Body>, next: Next) -> Response {
         HeaderValue::from_static(cache_control),
     );
     response
-}
-
-fn is_hashed_asset(path: &str) -> bool {
-    let Some(file_name) = path.rsplit('/').next() else {
-        return false;
-    };
-    let Some(stem) = file_name.rsplit_once('.').map(|(stem, _)| stem) else {
-        return false;
-    };
-    let Some((_, hash)) = stem.rsplit_once('-') else {
-        return false;
-    };
-    hash.len() >= 8
-        && hash
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 async fn require_admin(
@@ -2080,21 +2135,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cache_policy_marks_hashed_assets_immutable_and_shell_revalidates() {
-        assert!(is_hashed_asset("/assets/index-Abc12345.js"));
-        assert!(!is_hashed_asset("/assets/dispatch-hall.webp"));
+    async fn cache_policy_marks_manifest_listed_vite_assets_immutable_and_shell_revalidates() {
         let database_path =
             std::env::temp_dir().join(format!("ledger-static-{}.db", Uuid::new_v4()));
         let cache_path = std::env::temp_dir().join(format!("ledger-static-{}", Uuid::new_v4()));
         std::fs::create_dir_all(cache_path.join("assets")).unwrap();
+        std::fs::create_dir_all(cache_path.join(".vite")).unwrap();
         std::fs::write(
             cache_path.join("index.html"),
             "<!doctype html><title>Ledger</title>",
         )
         .unwrap();
         std::fs::write(
-            cache_path.join("assets/index-Abc12345.js"),
+            cache_path.join("assets/index-BVE-f5_C.js"),
             "console.log('ledger')",
+        )
+        .unwrap();
+        std::fs::write(cache_path.join("assets/index-EAQ5Mx42.css"), "body{}").unwrap();
+        std::fs::write(
+            cache_path.join(".vite/manifest.json"),
+            r#"{"index.html":{"file":"assets/index-BVE-f5_C.js","css":["assets/index-EAQ5Mx42.css"]}}"#,
         )
         .unwrap();
         std::fs::write(cache_path.join("sw.js"), "// worker").unwrap();
@@ -2117,7 +2177,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/assets/index-Abc12345.js")
+                    .uri("/assets/index-BVE-f5_C.js")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2126,6 +2186,54 @@ mod tests {
         assert_eq!(
             asset.headers()[header::CACHE_CONTROL],
             "public, max-age=31536000, immutable"
+        );
+        let stylesheet = static_router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/index-EAQ5Mx42.css")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stylesheet.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        for route in [
+            "/inbox",
+            "/sources",
+            "/digest",
+            "/settings",
+            "/demo",
+            "/demo/inbox",
+            "/demo/sources",
+            "/demo/digest",
+            "/demo/settings",
+            "/privacy",
+            "/terms",
+        ] {
+            let route_response = static_router
+                .clone()
+                .oneshot(Request::builder().uri(route).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(route_response.status(), StatusCode::OK, "{route}");
+        }
+        let unhashed_asset = static_router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/dispatch-hall.webp")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            unhashed_asset.headers()[header::CACHE_CONTROL],
+            "public, max-age=86400"
         );
         let worker = static_router
             .oneshot(

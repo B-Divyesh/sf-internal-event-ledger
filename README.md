@@ -49,6 +49,7 @@ npm run dev          # frontend at http://localhost:5173, proxies the API
 npm run dev:server   # backend at http://localhost:8080 (second terminal)
 npm test             # frontend, Rust, container, and browser claim tests
 npm run test:a11y    # builds and starts an isolated local accessibility server
+npm run test:e2e     # builds and starts an isolated production-like browser smoke server
 npm run build        # exact frontend build command; output is dist/
 cargo build --locked --release
 ```

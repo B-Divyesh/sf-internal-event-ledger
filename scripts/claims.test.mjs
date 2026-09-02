@@ -227,10 +227,13 @@ claim('response-policy', async () => {
   assert.equal(root.headers.get('cache-control'), 'no-cache');
   assert.match(root.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   const html = await root.text();
-  const script = html.match(/src="([^"]+\.js)"/)?.[1];
-  assert.ok(script);
-  const asset = await fetch(`${base}${script}`);
-  assert.equal(asset.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+  const emittedAssets = [...html.matchAll(/(?:src|href)="([^" ]+\.(?:js|css))"/g)].map((match) => match[1]);
+  assert.ok(emittedAssets.length >= 2, 'the release HTML must reference the emitted JavaScript and stylesheet');
+  assert.ok(emittedAssets.every((asset) => /^\/assets\/index-[A-Za-z0-9_-]{8}\.(?:js|css)$/.test(asset)), `unexpected Vite assets: ${emittedAssets.join(', ')}`);
+  for (const assetPath of emittedAssets) {
+    const asset = await fetch(`${base}${assetPath}`);
+    assert.equal(asset.headers.get('cache-control'), 'public, max-age=31536000, immutable', `${assetPath} must use immutable caching`);
+  }
   assert.equal((await fetch(`${base}/sw.js`)).headers.get('cache-control'), 'no-cache');
 });
 
@@ -252,6 +255,21 @@ claim('demo-isolation', async () => {
   assert.deepEqual([...new Set(apiRequests)], ['POST /api/demo']);
   const productionEvents = await fetch(`${base}/api/events`, { headers: auth }).then((response) => response.json());
   assert.equal(productionEvents.events.length, 0);
+
+  // Regression for the verifier's exact escape route: the legal navigation
+  // exits demo, deletes its browser state, and does not let the sample ledger
+  // reappear as a normal connected receiver.
+  await page.locator('.sidebar-foot [data-legal="privacy"]').click();
+  await page.getByRole('heading', { name: 'Privacy' }).waitFor();
+  assert.equal(new URL(page.url()).pathname, '/privacy');
+  assert.equal(await page.locator('.demo-banner').count(), 0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('demo:internal-event-ledger:workspace')), null);
+  await page.getByRole('button', { name: /^Inbox/ }).click();
+  await page.getByRole('heading', { name: 'Review operational events without Slack noise' }).waitFor();
+  assert.equal(new URL(page.url()).pathname, '/inbox');
+  assert.equal(await page.locator('.demo-banner, article.event-row').count(), 0);
+  assert.equal(await page.getByLabel('Administrator token').count(), 1);
+
   await fetch(`${base}/api/sources/${created.body.id}`, { method: 'DELETE', headers: auth });
   await context.close();
 });
