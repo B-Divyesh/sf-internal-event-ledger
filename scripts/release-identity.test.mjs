@@ -3,9 +3,9 @@ import test from 'node:test';
 import { assertBuildIdentity, verifyLiveBuildIdentity } from './release-identity.mjs';
 
 const candidate = '5c7523f15c39a5655051a7800f7719b313558420';
-const staleBuild = '5a15c977709b65e99171de3eb506c662cae30f43';
+const staleBuild = 'ee9f17d2362cbabdec75e49c080596be4623f0b7';
 
-test('release identity rejects the exact stale deployment recorded by verification 7', () => {
+test('release identity rejects the exact stale deployment recorded by verification 8', () => {
   assert.throws(
     () => assertBuildIdentity({ status: 'ok', build: staleBuild }, candidate),
     new RegExp(`expected ${candidate}, received ${staleBuild}`),

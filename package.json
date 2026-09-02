@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "dev:server": "cargo run",
     "build": "vite build",
-    "test": "vitest run && node --test scripts/container-contract.test.mjs scripts/forbidden-resource.test.mjs scripts/release-identity.test.mjs && cargo test --locked && npm run test:storage && npm run test:claims",
+    "test": "vitest run && node --test scripts/container-contract.test.mjs scripts/forbidden-resource.test.mjs scripts/release-identity.test.mjs && cargo test --locked && npm run test:storage && npm run test:claims && npm run test:a11y",
     "test:frontend": "vitest run",
     "test:forbidden-resources": "node --test scripts/forbidden-resource.test.mjs",
     "test:a11y": "node scripts/axe.mjs",
