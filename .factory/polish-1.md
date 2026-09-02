@@ -47,3 +47,15 @@ final source tree; live evidence is recorded after deployment in the handoff.
 - `npm run test:e2e` — mobile 390×844 end-to-end flow passes with no console errors.
 - `npm run build` — produces `dist/`; initial JS gzip is 11.69 KB and CSS gzip is 4.81 KB.
 - `npm run test:a11y` — 20 desktop/mobile scans, including the 404, report zero violations.
+
+## Live evidence
+
+- Live URL: <https://internal-event-ledger.sociobot.in>.
+- Cold live check: `/opt/fleet/lib/verify-url.sh` passed (709 ms load; title,
+  `lang`, one h1, main landmark, image alts, and no console errors).
+- Live public axe scan passed at desktop and 390×844 for the landing, demo
+  loading state, demo, and 404.
+- Direct cold browser check passed for `/`, `?demo=1` → `/demo`, Reset demo,
+  real link navigation, and `/does-not-exist` metadata/404 status.
+- Screenshots: `/tmp/iel-live-evidence/landing-390.png`,
+  `/tmp/iel-live-evidence/demo-390.png`, and `/tmp/iel-live-evidence/404-390.png`.

@@ -41,8 +41,12 @@ Final local results before deployment:
 
 ## Deployment and live verification
 
-The release commit, deployment output, live cold-load check, and exact live
-URL evidence are appended after deployment.
+- Deployed container image: `sociobotregistry.azurecr.io/sf-internal-event-ledger:56388fc92c48`.
+- The live health endpoint returned build `56388fc92c48679ab4ad5f49de1bf590255440fc` with status `ok`.
+- `/opt/fleet/lib/verify-url.sh https://internal-event-ledger.sociobot.in /tmp/iel-live-evidence` passed: 709 ms cold load, correct title/lang/main/h1/alts, and no console errors.
+- `PUBLIC_ONLY=1 npm run test:a11y -- https://internal-event-ledger.sociobot.in` passed eight live scans: desktop and 390×844 landing, demo loading, demo, and 404, all with zero violations.
+- Direct cold Playwright checks passed for the new landing copy and facts, `?demo=1` redirect/banner/reset, real Sources link semantics, and the 404 status/title/Open Graph metadata.
+- Live screenshots are at `/tmp/iel-live-evidence/landing-390.png`, `/tmp/iel-live-evidence/demo-390.png`, and `/tmp/iel-live-evidence/404-390.png`.
 
 ## Known gaps
 
