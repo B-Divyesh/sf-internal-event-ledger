@@ -64,5 +64,6 @@ test('site discovery and designed error documents ship in the frontend', async (
   const notFound = await readFile(new URL('../frontend/public/404.html', import.meta.url), 'utf8');
   assert.match(robots, /Sitemap: https:\/\/internal-event-ledger\.sociobot\.in\/sitemap\.xml/);
   for (const route of ['/', '/demo', '/privacy', '/terms']) assert.match(sitemap, new RegExp(`<loc>https://internal-event-ledger\\.sociobot\\.in${route.replace('/', '\\/')}`));
-  assert.match(notFound, /<h1>This route is not on the board<\/h1>/);
+  assert.match(notFound, /<h1>This page does not exist<\/h1>/);
+  for (const value of ['name="description"', 'rel="canonical"', 'property="og:title"', 'name="twitter:card"', 'rel="apple-touch-icon"', 'href="/privacy"', 'href="/terms"']) assert.match(notFound, new RegExp(value));
 });

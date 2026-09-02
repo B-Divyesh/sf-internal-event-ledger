@@ -405,12 +405,10 @@ pub fn is_database_locked(error: &anyhow::Error) -> bool {
 pub fn app(state: AppState, static_dir: PathBuf) -> Router {
     let index = static_dir.join("index.html");
     let static_cache_policy = StaticCachePolicy::from_vite_manifest(&static_dir);
-    let ingest_routes = Router::new()
-        .route("/ingest/{alias}", post(ingest))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            limit_ingest_requests,
-        ));
+    // Receiver requests are rate limited inside `ingest` after the endpoint
+    // token has been checked. That keeps invalid traffic in a separate bucket
+    // from a source's authenticated receiver allowance.
+    let ingest_routes = Router::new().route("/ingest/{alias}", post(ingest));
     let protected_api = Router::new()
         .route("/sources", get(list_sources).post(create_source))
         .route("/sources/{id}", delete(delete_source))
@@ -637,29 +635,6 @@ async fn limit_api_requests(
         return ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "This client is sending API requests too quickly. Try again shortly.".into(),
-        )
-        .into_response();
-    }
-    next.run(request).await
-}
-
-async fn limit_ingest_requests(
-    State(state): State<AppState>,
-    peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
-    headers: HeaderMap,
-    request: Request<Body>,
-    next: Next,
-) -> Response {
-    let address = client_ip(&state, peer.as_ref().map(|Extension(peer)| peer), &headers);
-    let allowed = match take_shared_request_token(&state.pool, "ingest", address, 240.0, 40.0).await
-    {
-        Ok(allowed) => allowed,
-        Err(error) => return error.into_response(),
-    };
-    if !allowed {
-        return ApiError(
-            StatusCode::TOO_MANY_REQUESTS,
-            "This client is sending receiver requests too quickly. Try again shortly.".into(),
         )
         .into_response();
     }
@@ -1006,8 +981,21 @@ async fn ingest(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let address = client_ip(&s, peer.as_ref().map(|Extension(peer)| peer), &headers);
     let source = sqlx::query_as::<_, IngestSource>("SELECT id,token_hash,signing_secret,redact_headers,redact_paths FROM sources WHERE alias=?")
-        .bind(&alias).fetch_optional(&s.pool).await?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Unknown endpoint alias.".into()))?;
+        .bind(&alias).fetch_optional(&s.pool).await?;
+    let Some(source) = source else {
+        if !take_shared_request_token(&s.pool, "ingest-invalid", address, 60.0, 20.0).await? {
+            return Err(ApiError(
+                StatusCode::TOO_MANY_REQUESTS,
+                "This client is sending receiver requests too quickly. Try again shortly.".into(),
+            ));
+        }
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "Unknown endpoint alias.".into(),
+        ));
+    };
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -1028,6 +1016,20 @@ async fn ingest(
         .unwrap_u8()
         != 1
     {
+        if !take_shared_request_token(
+            &s.pool,
+            &format!("ingest-invalid:{}", source.id),
+            address,
+            60.0,
+            20.0,
+        )
+        .await?
+        {
+            return Err(ApiError(
+                StatusCode::TOO_MANY_REQUESTS,
+                "This client is sending receiver requests too quickly. Try again shortly.".into(),
+            ));
+        }
         return Err(ApiError(
             StatusCode::UNAUTHORIZED,
             "A valid endpoint token is required.".into(),
@@ -1039,6 +1041,21 @@ async fn ingest(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         if !verify_signature(secret.as_bytes(), &body, signature) {
+            if !take_shared_request_token(
+                &s.pool,
+                &format!("ingest-invalid:{}", source.id),
+                address,
+                60.0,
+                20.0,
+            )
+            .await?
+            {
+                return Err(ApiError(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "This client is sending receiver requests too quickly. Try again shortly."
+                        .into(),
+                ));
+            }
             return Err(ApiError(
                 StatusCode::UNAUTHORIZED,
                 "The event signature did not match.".into(),
@@ -1046,15 +1063,7 @@ async fn ingest(
         }
     }
     let receiver_scope = format!("ingest-auth:{}", source.id);
-    if !take_shared_request_token(
-        &s.pool,
-        &receiver_scope,
-        client_ip(&s, peer.as_ref().map(|Extension(peer)| peer), &headers),
-        120.0,
-        1.0,
-    )
-    .await?
-    {
+    if !take_shared_request_token(&s.pool, &receiver_scope, address, 120.0, 1.0).await? {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "This receiver is accepting events too quickly. Try again shortly.".into(),
@@ -1905,6 +1914,7 @@ mod tests {
             serde_json::from_slice(&created.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
         let token = payload["token"].as_str().unwrap().to_owned();
+        let mut limited = false;
         for _ in 0..160 {
             let response = router
                 .clone()
@@ -1918,8 +1928,14 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                limited = true;
+                assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "1");
+            } else {
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            }
         }
+        assert!(limited, "invalid receiver traffic must be rate limited");
         let response = router
             .oneshot(
                 Request::builder()
@@ -2091,7 +2107,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        assert!(String::from_utf8_lossy(&body).contains("This route is not on the board"));
+        assert!(String::from_utf8_lossy(&body).contains("This page does not exist"));
         let _ = std::fs::remove_file(path);
     }
 

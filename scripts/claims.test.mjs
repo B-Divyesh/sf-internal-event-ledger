@@ -86,7 +86,7 @@ claim('demo-sandbox', async () => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await context.newPage();
   await page.goto(base, { waitUntil: 'networkidle' });
-  assert.equal(await page.locator('h1').textContent(), 'Review operational events without Slack noise');
+  assert.equal(await page.locator('h1').textContent(), 'Review low-priority webhook events');
   assert.equal(await page.getByRole('button', { name: 'Try it with sample data' }).count(), 1);
   await page.getByRole('button', { name: 'Try it with sample data' }).click();
   await page.locator('.event-summary', { hasText: 'Refund review requested for annual plan' }).waitFor();
@@ -160,6 +160,7 @@ claim('self-hosted-runtime', async () => {
 
 claim('review-workflow', async () => {
   const context = await browser.newContext();
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const page = await context.newPage();
   await page.goto(`${base}/demo`, { waitUntil: 'networkidle' });
   await page.getByLabel('Search the ledger').fill('catalogue');
@@ -174,13 +175,15 @@ claim('review-workflow', async () => {
   page.once('dialog', (dialog) => dialog.accept());
   await mapping.getByRole('button', { name: 'Archive event' }).click();
   await mapping.waitFor({ state: 'detached' });
-  await page.getByRole('button', { name: 'Sources', exact: true }).click();
+  await page.getByRole('link', { name: 'Sources', exact: true }).click();
   await page.getByRole('heading', { name: 'Incoming sources' }).waitFor();
-  await page.getByRole('button', { name: 'Digest' }).click();
-  await page.getByRole('heading', { name: 'Daily digest' }).waitFor();
+  await page.getByRole('link', { name: 'Digest' }).click();
+  await page.getByRole('heading', { name: 'On-demand digest' }).waitFor();
   await page.locator('.digest-number').waitFor();
   assert.equal(await page.evaluate(() => document.activeElement?.tagName), 'H1');
   assert.equal(await page.locator('.digest-number strong').textContent(), '11');
+  await page.getByRole('button', { name: 'Copy digest' }).click();
+  assert.match(await page.evaluate(() => navigator.clipboard.readText()), /Internal Event Ledger/);
   await page.goBack();
   await page.getByRole('heading', { name: 'Incoming sources' }).waitFor();
   assert.equal(await page.evaluate(() => document.activeElement?.tagName), 'H1');
@@ -264,8 +267,8 @@ claim('demo-isolation', async () => {
   assert.equal(new URL(page.url()).pathname, '/privacy');
   assert.equal(await page.locator('.demo-banner').count(), 0);
   assert.equal(await page.evaluate(() => localStorage.getItem('demo:internal-event-ledger:workspace')), null);
-  await page.getByRole('button', { name: /^Inbox/ }).click();
-  await page.getByRole('heading', { name: 'Review operational events without Slack noise' }).waitFor();
+  await page.goto(`${base}/inbox`, { waitUntil: 'networkidle' });
+  await page.getByRole('heading', { name: 'Review low-priority webhook events' }).waitFor();
   assert.equal(new URL(page.url()).pathname, '/inbox');
   assert.equal(await page.locator('.demo-banner, article.event-row').count(), 0);
   assert.equal(await page.getByLabel('Administrator token').count(), 1);
@@ -302,8 +305,8 @@ claim('privacy-no-tracking', async () => {
   await page.goto(base, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: 'Try it with sample data' }).click();
   await page.locator('.event-summary', { hasText: 'Refund review requested for annual plan' }).waitFor();
-  await page.getByRole('button', { name: 'Digest' }).click();
-  await page.getByRole('heading', { name: 'Daily digest' }).waitFor();
+  await page.getByRole('link', { name: 'Digest' }).click();
+  await page.getByRole('heading', { name: 'On-demand digest' }).waitFor();
   assert.deepEqual([...origins], [new URL(base).origin]);
   await context.close();
 });
@@ -331,7 +334,7 @@ claim('ingest-safety', async () => {
   for (let index = 0; index < 2; index += 1) {
     const response = await fetch(`${base}/ingest/signed-redacted-source`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-ledger-token': created.body.token, 'x-ledger-signature': `sha256=${signature}`, 'x-customer-email': 'secret@example.test', 'x-event-fingerprint': 'same-order' },
+      headers: { 'content-type': 'application/json', 'x-ledger-token': created.body.token, 'x-ledger-signature': `sha256=${signature}`, authorization: 'Bearer should-not-store', cookie: 'session=should-not-store', 'x-customer-email': 'secret@example.test', 'x-event-fingerprint': 'same-order' },
       body,
     });
     assert.equal(response.status, 202);
@@ -341,9 +344,113 @@ claim('ingest-safety', async () => {
   assert.equal(event.occurrence_count, 2);
   assert.match(event.payload_json, /\[REDACTED\]/);
   assert.doesNotMatch(event.payload_json, /secret@example\.test/);
-  assert.doesNotMatch(event.headers_json, /x-ledger-token|x-ledger-signature/);
+  assert.doesNotMatch(event.headers_json, /x-ledger-token|x-ledger-signature|authorization|cookie/);
   assert.match(event.headers_json, /\[REDACTED\]/);
   await fetch(`${base}/api/sources/${created.body.id}`, { method: 'DELETE', headers: auth });
+});
+
+claim('receiver-token-once', async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.getByLabel('Administrator token').fill(adminToken);
+  await page.getByRole('button', { name: 'Open my ledger' }).click();
+  await page.getByRole('link', { name: 'Sources', exact: true }).click();
+  await page.getByLabel('Source name').fill('One time token source');
+  await page.getByLabel('Endpoint alias').fill('one-time-token-source');
+  await page.getByRole('button', { name: 'Create endpoint' }).click();
+  const firstToken = await page.locator('.credential code').last().textContent();
+  assert.match(firstToken || '', /^[a-f0-9]{48}$/);
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.equal(await page.getByRole('heading', { name: 'Incoming sources' }).count(), 1);
+  assert.equal(await page.locator('.credential').count(), 0);
+  const second = await createSource('separate-token-source');
+  assert.equal(second.response.status, 201);
+  assert.notEqual(firstToken, second.body.token);
+  const sources = await fetch(`${base}/api/sources`, { headers: auth }).then((response) => response.json());
+  for (const source of sources.sources.filter((source) => ['one-time-token-source', 'separate-token-source'].includes(source.alias))) {
+    await fetch(`${base}/api/sources/${source.id}`, { method: 'DELETE', headers: auth });
+  }
+  await context.close();
+});
+
+claim('receiver-authentication', async () => {
+  const created = await createSource('receiver-auth-fixture');
+  assert.equal(created.response.status, 201);
+  const body = JSON.stringify({ type: 'auth.fixture', summary: 'Receiver authentication fixture' });
+  const deliveries = [
+    [`${base}/ingest/receiver-auth-fixture`, { 'x-ledger-token': created.body.token }],
+    [`${base}/ingest/receiver-auth-fixture`, { authorization: `Bearer ${created.body.token}` }],
+    [`${base}/ingest/receiver-auth-fixture?token=${created.body.token}`, {}],
+  ];
+  for (const [url, headers] of deliveries) {
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.111', ...headers }, body });
+    assert.equal(response.status, 202);
+  }
+  const invalid = await fetch(`${base}/ingest/receiver-auth-fixture`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.111', 'x-ledger-token': 'wrong-token' }, body });
+  assert.equal(invalid.status, 401);
+  await fetch(`${base}/api/sources/${created.body.id}`, { method: 'DELETE', headers: auth });
+});
+
+claim('group-state-transition', async () => {
+  const created = await createSource('state-transition-fixture');
+  assert.equal(created.response.status, 201);
+  const send = async (fingerprint, summary) => fetch(`${base}/ingest/state-transition-fixture`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ledger-token': created.body.token, 'x-event-fingerprint': fingerprint }, body: JSON.stringify({ type: 'state.fixture', summary }) });
+  assert.equal((await send('archive-fingerprint', 'Archived group')).status, 202);
+  let events = await fetch(`${base}/api/events`, { headers: auth }).then((response) => response.json());
+  let archived = events.events.find((event) => event.summary === 'Archived group');
+  await fetch(`${base}/api/events/${archived.id}`, { method: 'PATCH', headers: auth, body: JSON.stringify({ status: 'archived' }) });
+  assert.equal((await send('archive-fingerprint', 'Archived group')).status, 202);
+  assert.equal((await send('ack-fingerprint', 'Acknowledged group')).status, 202);
+  events = await fetch(`${base}/api/events`, { headers: auth }).then((response) => response.json());
+  let acknowledged = events.events.find((event) => event.summary === 'Acknowledged group');
+  await fetch(`${base}/api/events/${acknowledged.id}`, { method: 'PATCH', headers: auth, body: JSON.stringify({ status: 'acknowledged' }) });
+  assert.equal((await send('ack-fingerprint', 'Acknowledged group')).status, 202);
+  events = await fetch(`${base}/api/events`, { headers: auth }).then((response) => response.json());
+  archived = events.events.find((event) => event.summary === 'Archived group');
+  acknowledged = events.events.find((event) => event.summary === 'Acknowledged group');
+  assert.equal(archived.status, 'unread');
+  assert.equal(acknowledged.status, 'acknowledged');
+  await fetch(`${base}/api/sources/${created.body.id}`, { method: 'DELETE', headers: auth });
+});
+
+claim('health-identity', async () => {
+  const health = await fetch(`${base}/health`);
+  assert.equal(health.status, 200);
+  const payload = await health.json();
+  assert.equal(payload.status, 'ok');
+  assert.ok(typeof payload.build === 'string' && payload.build.length > 0);
+});
+
+claim('receiver-quota', async () => {
+  const created = await createSource('receiver-quota-fixture');
+  assert.equal(created.response.status, 201);
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.112' };
+  const invalid = await Promise.all(Array.from({ length: 120 }, () => fetch(`${base}/ingest/receiver-quota-fixture`, { method: 'POST', headers: { ...headers, 'x-ledger-token': 'invalid' }, body: '{"summary":"invalid"}' })));
+  assert.ok(invalid.some((response) => response.status === 429));
+  const valid = await fetch(`${base}/ingest/receiver-quota-fixture`, { method: 'POST', headers: { ...headers, 'x-ledger-token': created.body.token }, body: '{"summary":"valid after invalid traffic"}' });
+  assert.equal(valid.status, 202);
+  await fetch(`${base}/api/sources/${created.body.id}`, { method: 'DELETE', headers: auth });
+});
+
+claim('scope-boundary', async () => {
+  const created = await createSource('scope-boundary-fixture');
+  const body = JSON.stringify({ type: 'scope.fixture', summary: 'One stored delivery' });
+  assert.equal((await fetch(`${base}/ingest/scope-boundary-fixture`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ledger-token': created.body.token }, body })).status, 202);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const events = await fetch(`${base}/api/events`, { headers: auth }).then((response) => response.json());
+  const event = events.events.find((item) => item.summary === 'One stored delivery');
+  assert.equal(event.occurrence_count, 1);
+  await fetch(`${base}/api/sources/${created.body.id}`, { method: 'DELETE', headers: auth });
+});
+
+claim('free-mit-license', async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.getByText('Free to self-host under the MIT License.').waitFor();
+  assert.match(await readFile(join(process.cwd(), 'LICENSE'), 'utf8'), /Permission is hereby granted, free of charge/);
+  await context.close();
 });
 
 claim('self-hosted-controls', async () => {
@@ -360,20 +467,28 @@ claim('self-hosted-controls', async () => {
 });
 
 claim('api-rate-limit', async () => {
-  const burstStartedAt = performance.now();
-  const responses = await Promise.all(Array.from({ length: 120 }, () =>
-    fetch(`${base}/api/events`, { headers: { authorization: `Bearer ${adminToken}`, 'x-forwarded-for': '203.0.113.90' } }),
-  ));
-  const burstElapsedSeconds = (performance.now() - burstStartedAt) / 1000;
-  const allowed = responses.filter((response) => response.status === 200).length;
-  const limited = responses.filter((response) => response.status === 429);
-  const maximumWithMeasuredRefill = 60 + Math.ceil(burstElapsedSeconds * 20) + 1;
-  assert.ok(
-    allowed >= 60 && allowed <= maximumWithMeasuredRefill,
-    `one-connection 60-token burst allowed ${allowed} in ${burstElapsedSeconds.toFixed(3)}s (maximum ${maximumWithMeasuredRefill})`,
-  );
-  assert.ok(limited.length >= 120 - maximumWithMeasuredRefill);
-  assert.ok(limited.every((response) => response.headers.get('retry-after') === '1'));
+  for (const [label, headers] of [
+    ['anonymous management', { 'x-forwarded-for': '203.0.113.90' }],
+    ['authenticated management', { authorization: `Bearer ${adminToken}`, 'x-forwarded-for': '203.0.113.91' }],
+  ]) {
+    const burstStartedAt = performance.now();
+    const responses = await Promise.all(Array.from({ length: 120 }, () => fetch(`${base}/api/events`, { headers })));
+    const burstElapsedSeconds = (performance.now() - burstStartedAt) / 1000;
+    const allowed = responses.filter((response) => response.status === 200 || response.status === 401).length;
+    const limited = responses.filter((response) => response.status === 429);
+    const maximumWithMeasuredRefill = 60 + Math.ceil(burstElapsedSeconds * 20) + 1;
+    assert.ok(allowed >= 60 && allowed <= maximumWithMeasuredRefill, `${label} allowance was ${allowed}`);
+    assert.ok(limited.length >= 120 - maximumWithMeasuredRefill, `${label} must be limited`);
+    assert.ok(limited.every((response) => response.headers.get('retry-after') === '1'));
+  }
+  const receiver = await createSource('rate-limit-receiver');
+  const receiverResponses = await Promise.all(Array.from({ length: 130 }, (_, index) => fetch(`${base}/ingest/rate-limit-receiver`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.92', 'x-ledger-token': receiver.body.token, 'x-event-fingerprint': `receiver-${index}` }, body: '{"summary":"rate limited receiver"}',
+  })));
+  const receiverLimited = receiverResponses.filter((response) => response.status === 429);
+  assert.ok(receiverLimited.length > 0);
+  assert.ok(receiverLimited.every((response) => response.headers.get('retry-after') === '1'));
+  await fetch(`${base}/api/sources/${receiver.body.id}`, { method: 'DELETE', headers: auth });
 });
 
 after(async () => {

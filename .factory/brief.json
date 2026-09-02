@@ -1,11 +1,12 @@
 {
   "slug": "internal-event-ledger",
   "title": "Internal Event Ledger",
+  "summary": "Review low-priority webhook events in a self-hosted ledger.",
   "territory": "devtools-data",
   "user": "A solo developer or small product team that needs to review non-urgent operational events without letting them disappear inside Slack channels.",
   "smallest_useful_product": "Self-hosted receiver with endpoint aliases, event fingerprints, searchable timeline, acknowledge/archive state, daily digest, and JSON/CSV export.",
   "success_measure": "A pilot routes at least five sources through it and reduces unread operational Slack messages by 50% while retaining a searchable record for 30 days.",
   "artifact_class": "web-with-backend",
-  "monetization": "freemium",
+  "monetization": "free",
   "constraints": "Verify signatures where supported; redact configured headers/body paths; provide retention deletion and a simple Docker deployment."
 }

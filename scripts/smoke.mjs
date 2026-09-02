@@ -93,8 +93,7 @@ if (!await page.locator('#main').evaluate((node) => node === document.activeElem
 await page.getByLabel('Administrator token').fill(adminToken);
 await page.getByRole('button', { name: 'Open my ledger' }).click();
 await page.getByRole('heading', { name: 'Event ledger' }).waitFor();
-await page.getByRole('button', { name: 'Sources', exact: true }).focus();
-await page.keyboard.press('Enter');
+await page.getByRole('link', { name: 'Sources', exact: true }).click();
 await page.getByRole('heading', { name: 'Incoming sources' }).waitFor();
 if (new URL(page.url()).pathname !== '/sources') throw new Error(`Sources used a non-semantic route: ${page.url()}`);
 const suffix = Date.now().toString().slice(-7);
@@ -102,8 +101,8 @@ await page.getByLabel('Source name').fill(`Smoke source ${suffix}`);
 await page.getByLabel('Endpoint alias').fill(`smoke-${suffix}`);
 await page.getByLabel('Redact body paths').fill('customer.email');
 await page.getByRole('button', { name: 'Create endpoint' }).click();
-await page.getByRole('heading', { name: 'Copy this token now' }).waitFor();
-const token = (await page.locator('.credential > code').nth(1).textContent()).trim();
+await page.locator('.credential').waitFor();
+const token = (await page.locator('.credential > code').last().textContent()).trim();
 
 const response = await context.request.post(`${base}/ingest/smoke-${suffix}`, {
   headers: { 'x-ledger-token': token, 'content-type': 'application/json' },
@@ -111,15 +110,15 @@ const response = await context.request.post(`${base}/ingest/smoke-${suffix}`, {
 });
 if (response.status() !== 202) throw new Error(`Ingest returned ${response.status()}`);
 
-await page.getByRole('button', { name: /^Inbox/ }).click();
+await page.getByLabel('Ledger sections').getByRole('link', { name: /^Inbox/ }).click();
 await page.getByRole('button', { name: 'Refresh' }).click();
 if (new URL(page.url()).pathname !== '/inbox') throw new Error(`Inbox used a non-semantic route: ${page.url()}`);
 const eventRow = page.locator('article', { hasText: `Smoke source ${suffix}` });
 await eventRow.getByText('End-to-end smoke event', { exact: true }).waitFor();
 await eventRow.getByRole('button', { name: 'Acknowledge' }).click();
 await eventRow.getByText('acknowledged', { exact: true }).waitFor();
-await page.getByRole('button', { name: 'Digest' }).click();
-await page.getByRole('heading', { name: 'Daily digest' }).waitFor();
+await page.getByRole('link', { name: 'Digest' }).click();
+await page.getByRole('heading', { name: 'On-demand digest' }).waitFor();
 if (new URL(page.url()).pathname !== '/digest') throw new Error(`Digest used a non-semantic route: ${page.url()}`);
 await page.goto(`${base}/privacy`, { waitUntil: 'networkidle' });
 await page.getByRole('heading', { name: 'Privacy' }).waitFor();

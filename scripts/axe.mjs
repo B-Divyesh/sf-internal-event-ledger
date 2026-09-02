@@ -14,7 +14,7 @@ const viewports = [{ name: 'desktop', width: 1366, height: 900 }, { name: 'mobil
 const views = [
   { name: 'Inbox', button: /^Inbox/, heading: 'Event ledger' },
   { name: 'Sources', button: 'Sources', heading: 'Incoming sources' },
-  { name: 'Digest', button: 'Digest', heading: 'Daily digest' },
+  { name: 'Digest', button: 'Digest', heading: 'On-demand digest' },
   { name: 'Settings', button: 'Settings', heading: 'Settings' },
   { name: 'Privacy', link: 'Privacy', heading: 'Privacy' },
   { name: 'Terms', link: 'Terms', heading: 'Terms' },
@@ -169,6 +169,13 @@ async function run() {
       await demoPage.getByRole('heading', { name: 'Event ledger' }).waitFor();
       await scan(demoPage, viewport, 'Demo');
       await demoContext.close();
+
+      const missingContext = await browser.newContext({ viewport, serviceWorkers: 'block' });
+      const missingPage = await missingContext.newPage();
+      await missingPage.goto(`${server.baseUrl}/does-not-exist`, { waitUntil: 'networkidle' });
+      await missingPage.getByRole('heading', { name: 'This page does not exist' }).waitFor();
+      await scan(missingPage, viewport, '404');
+      await missingContext.close();
     }
   } finally {
     if (browser) await browser.close();

@@ -1,42 +1,49 @@
-# Internal Event Ledger — adversarial review 1 handoff
+# Internal Event Ledger — polish 1 handoff
 
 ## Outcome
 
-**FAIL.** The complete review is in [`review-1.md`](review-1.md). It records 35
-findings: 19 major and 16 minor. No product code was changed.
+All 35 findings in `review-1.md` are repaired. The detailed finding-to-change
+mapping is in `polish-1.md`.
 
-## What was done
+## What changed
 
-- Cold-loaded the live landing page in fresh 390×844 and 1440×900 contexts.
-- Audited every landing string and README prose sentence with word counts.
-- Exercised the live demo, edit, Reset, storage namespaces, request log, and
-  offline reload.
-- Ran all 14 claim commands individually from a clean clone at
-  `06e1a1cec0c42cb9e781e1450ad3695f0bb44c73`; all passed.
-- Ran the complete `npm test` gate in that clean clone; it passed.
-- Checked live routes, metadata, links, assets, Back behavior, route focus,
-  mobile overflow, the designed 404, and the visual identity.
-- Ran `verify-url.sh` and Playwright axe scans of the landing, demo, legal, and
-  404 pages. The scans found no accessibility violations.
-- Read the prior handoff. No earlier review or polish files exist.
+- Rewrote the cold first screen with a concrete job headline, tested offline,
+  privacy, and free-MIT facts, and consistent event terminology.
+- Kept the one-click `/demo` sandbox isolated and persistent offline; improved
+  its real-route navigation semantics and retained banner/reset/exit behavior.
+- Removed the inert daily-review-time setting. The product now correctly names
+  the existing feature an on-demand digest.
+- Added claim registry coverage for receiver tokens, all auth modes, state
+  transitions, health identity, scope, free license, and receiver quota.
+- Separated invalid receiver rate-limit buckets from valid receiver quotas.
+- Completed the designed 404 metadata/footer and added it to accessibility scans.
+- Updated README, catalog description, copy audit, test expectations, and all
+  routing/accessibility checks without changing the art-deco transit-ledger identity.
 
-## How to verify
+## Verification
+
+Run from a fresh checkout:
 
 ```sh
 npm ci
 npm test
-/opt/fleet/lib/verify-url.sh https://internal-event-ledger.sociobot.in /tmp/iel-evidence
+npm run test:e2e
 ```
 
-Run each command in `.factory/claims.json` separately from a fresh clone. Use a
-fresh Playwright context for `/` and `/demo`; record requests, wait for service
-worker control, set the context offline, and reload.
+Final local results before deployment:
 
-## Left to do
+- `npm test` passed: 4 frontend tests, 8 Node contract tests, 21 Rust tests,
+  2 storage tests, 21 claim tests, and 20 axe scans (desktop/mobile including 404).
+- `npm run test:e2e` passed at 390×844 with keyboard skip-link behavior,
+  source creation, ingest, acknowledgment, digest, privacy route, and no console errors.
+- `npm run build` produced `dist/`; emitted JS is 11.69 KB gzip and CSS is
+  4.81 KB gzip.
 
-Address every finding in `review-1.md`, especially the missing price/offline
-hero facts, unlisted or under-tested claims, inert review-time setting, button
-route semantics, and incomplete 404 metadata/footer. Then rerun the entire
-review from scratch. The standalone axe CLI had a ChromeDriver 152 / Chromium
-145 mismatch in this worker; the installed Playwright axe integration ran
-successfully instead.
+## Deployment and live verification
+
+The release commit, deployment output, live cold-load check, and exact live
+URL evidence are appended after deployment.
+
+## Known gaps
+
+None.

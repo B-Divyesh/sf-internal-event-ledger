@@ -71,8 +71,8 @@
   },
   {
     "id": "offline-demo",
-    "claim": "The sample ledger remains readable offline after its first visit.",
-    "where": "README demo section",
+    "claim": "Sample events stay readable offline after one visit.",
+    "where": "landing facts, README demo section",
     "test": "npm run test:claims -- --grep @claim:offline-demo",
     "sandbox": "fresh browser context; load /demo online; wait for service-worker control; set context offline; reload and assert all five groups"
   },
@@ -82,6 +82,55 @@
     "where": "README receiver and privacy sections",
     "test": "npm run test:claims -- --grep @claim:ingest-safety",
     "sandbox": "fresh database; create one signed source; send two signed fixture events; assert grouped count, redaction, and discarded credentials"
+  },
+  {
+    "id": "receiver-token-once",
+    "claim": "A source receiver token is shown once and each source has a separate token.",
+    "where": "README receive events section, Sources screen",
+    "test": "npm run test:claims -- --grep @claim:receiver-token-once",
+    "sandbox": "fresh administrator browser session; create two sources; observe the first token, reload the Sources route, and assert it is no longer displayed and the tokens differ"
+  },
+  {
+    "id": "receiver-authentication",
+    "claim": "A source accepts its receiver token in the ledger header, Bearer header, or token query parameter.",
+    "where": "README receive events section",
+    "test": "npm run test:claims -- --grep @claim:receiver-authentication",
+    "sandbox": "fresh source; post a fixture through each accepted token location and assert 202; post an invalid token and assert 401"
+  },
+  {
+    "id": "group-state-transition",
+    "claim": "A new event reopens an archived group and preserves an acknowledged group.",
+    "where": "README receive events section",
+    "test": "npm run test:claims -- --grep @claim:group-state-transition",
+    "sandbox": "fresh source; archive then re-ingest one fingerprint and acknowledge then re-ingest another; assert unread and acknowledged states"
+  },
+  {
+    "id": "health-identity",
+    "claim": "GET /health returns service status and build SHA.",
+    "where": "README digest, retention, and export section",
+    "test": "npm run test:claims -- --grep @claim:health-identity",
+    "sandbox": "fresh PORT-only server; assert a 200 JSON response contains status and a non-empty build identifier"
+  },
+  {
+    "id": "receiver-quota",
+    "claim": "Valid receiver deliveries have a separate quota from invalid delivery attempts.",
+    "where": "README privacy and security section",
+    "test": "npm run test:claims -- --grep @claim:receiver-quota",
+    "sandbox": "fresh source and client address; exhaust invalid ingest attempts then assert a valid signed delivery is still accepted"
+  },
+  {
+    "id": "scope-boundary",
+    "claim": "The product is not a pager, retrying webhook proxy, automation engine, or guaranteed-delivery system.",
+    "where": "README introduction, Terms scope section",
+    "test": "npm run test:claims -- --grep @claim:scope-boundary",
+    "sandbox": "fresh source; submit one event, wait through the retry window, and assert one stored event with no extra request or delivery activity"
+  },
+  {
+    "id": "free-mit-license",
+    "claim": "The product is free to self-host under the MIT License.",
+    "where": "landing facts, README privacy and security section",
+    "test": "npm run test:claims -- --grep @claim:free-mit-license",
+    "sandbox": "fresh public landing browser context and repository license; assert the free self-host statement and MIT license text"
   },
   {
     "id": "self-hosted-controls",
