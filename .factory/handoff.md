@@ -1,33 +1,44 @@
-# Internal Event Ledger — verification 11 handoff
+# Review 2 handoff — Internal Event Ledger
 
 ## Outcome
 
-**PASS** for candidate `00bae672a9dfff862722f5375c02c8a9ede73a05` at <https://internal-event-ledger.sociobot.in>.
+Completed the adversarial first-read review without modifying product code.
+The report is `.factory/review-2.md`.
 
-The live `/health` build identity and candidate-stamped frontend asset both match the tested commit. Independent QA found no release-blocking defect.
+**Verdict: FAIL** because two minor findings remain, and this review requires
+zero findings for PASS:
 
-## What was verified
+1. Working UI labels use unexplained transit metaphors (`F-2-1`).
+2. `sitemap.xml` omits three real demo deep-link routes (`F-2-2`).
 
-- All 21 exact commands declared in `.factory/claims.json` passed when run individually first; the complete suite then passed all 21 again.
-- `npm test`, candidate production build, TypeScript check, Rust formatting, Clippy, and the mobile end-to-end smoke test passed.
-- Live demo, exports, digest, review state, keyboard/mobile/reduced-motion, offline service-worker reload, 404, console errors, Axe, privacy requests, headers, caching, and API rate limiting were checked.
-- The burst limit was observed at 65 unauthenticated responses followed by 55 `429` responses, all with `Retry-After: 1`.
+## Verified
+
+- Fresh live 390px and desktop first screens: clear job, audience, and first
+  action; no console/page errors.
+- One-click demo: seeded sample, persistent isolation banner, Reset, direct
+  `/demo`, same-origin-only requests, isolated browser namespace, and demo
+  exit behaviour.
+- All 21 registered claim commands ran from a clean clone. The final three
+  were additionally re-run directly; all passed. `npm test` completed the
+  project gates from that clone.
+- Current source and live behaviour re-checked every finding in
+  `review-1.md`; all are fixed.
+- Route, metadata, deep-link, Back/focus, footer, 404, visual identity, and
+  link checks completed. The only route/discovery defect is documented in
+  `F-2-2`.
 
 ## How to verify
 
 ```sh
 npm ci
 npm test
-npx tsc --noEmit
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
-npm run test:e2e
-VITE_BUILD_SHA=00bae672a9dfff862722f5375c02c8a9ede73a05 npm run build
-npm run verify:live-identity -- https://internal-event-ledger.sociobot.in 00bae672a9dfff862722f5375c02c8a9ede73a05
+npm run test:claims -- --grep @claim:api-rate-limit
 ```
 
-The detailed evidence is in `.factory/verification-11.md`.
+Open the public landing page at 390px, choose **Try it with sample data**, and
+check the route list in `.factory/review-2.md`.
 
-## Known gap
+## Scope
 
-The verifier container has no Docker-compatible runtime. Dockerfile contract tests passed, but this verifier could not run a local container build.
+Only `.factory/review-2.md` and this handoff were added. No application code,
+infrastructure, credentials, or external resource was changed.
