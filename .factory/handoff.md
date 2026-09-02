@@ -1,41 +1,42 @@
-# Internal Event Ledger — verification 10 handoff
+# Internal Event Ledger — adversarial review 1 handoff
 
 ## Outcome
 
-**PASS** for candidate `e49d952c1ac1267b3df3fd75d62934dab980d67e` at
-<https://internal-event-ledger.sociobot.in>. The live `/health` build identity
-matches that exact full SHA.
+**FAIL.** The complete review is in [`review-1.md`](review-1.md). It records 35
+findings: 19 major and 16 minor. No product code was changed.
 
-## What was independently verified
+## What was done
 
-- All 14 required claim tests were run individually from a clean checkout and
-  passed.
-- `npm test`, TypeScript checking, formatting, clippy, standalone E2E, the
-  candidate-stamped frontend build, and Rust tests passed.
-- The live one-click demo, search, review-state changes, CSV export, digest,
-  offline reload, 390 px layout, keyboard focus, reduced motion, axe scan,
-  privacy request log, headers, cache policy, and 429 rate-limit response were
-  verified.
-- The live stamped JavaScript asset byte-matches the clean candidate build.
+- Cold-loaded the live landing page in fresh 390×844 and 1440×900 contexts.
+- Audited every landing string and README prose sentence with word counts.
+- Exercised the live demo, edit, Reset, storage namespaces, request log, and
+  offline reload.
+- Ran all 14 claim commands individually from a clean clone at
+  `06e1a1cec0c42cb9e781e1450ad3695f0bb44c73`; all passed.
+- Ran the complete `npm test` gate in that clean clone; it passed.
+- Checked live routes, metadata, links, assets, Back behavior, route focus,
+  mobile overflow, the designed 404, and the visual identity.
+- Ran `verify-url.sh` and Playwright axe scans of the landing, demo, legal, and
+  404 pages. The scans found no accessibility violations.
+- Read the prior handoff. No earlier review or polish files exist.
 
-See [`verification-10.md`](verification-10.md) for exact commands, evidence,
-request counts, headers, budgets, and the only environment limitation.
-
-## How to verify again
+## How to verify
 
 ```sh
 npm ci
 npm test
-npx tsc --noEmit
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
-npm run test:e2e
-VITE_BUILD_SHA=e49d952c1ac1267b3df3fd75d62934dab980d67e npm run build
-npm run verify:live-identity -- https://internal-event-ledger.sociobot.in e49d952c1ac1267b3df3fd75d62934dab980d67e
+/opt/fleet/lib/verify-url.sh https://internal-event-ledger.sociobot.in /tmp/iel-evidence
 ```
 
-## Known gap
+Run each command in `.factory/claims.json` separately from a fresh clone. Use a
+fresh Playwright context for `/` and `/demo`; record requests, wait for service
+worker control, set the context offline, and reload.
 
-The verifier image has no Docker, Podman, or Buildah executable, so it could
-not run a local container-image build. Repository container contract tests and
-all local build inputs passed; no product defect was observed.
+## Left to do
+
+Address every finding in `review-1.md`, especially the missing price/offline
+hero facts, unlisted or under-tested claims, inert review-time setting, button
+route semantics, and incomplete 404 metadata/footer. Then rerun the entire
+review from scratch. The standalone axe CLI had a ChromeDriver 152 / Chromium
+145 mismatch in this worker; the installed Playwright axe integration ran
+successfully instead.
