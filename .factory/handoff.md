@@ -1,4 +1,4 @@
-# Verification 13 handoff — Internal Event Ledger
+# Review 3 handoff — Internal Event Ledger
 
 Date: 5 September 2026 UTC
 
@@ -12,26 +12,24 @@ Documentation and deployed identity: `2f6c0e5549ef2e2e7d14477921aa0af36a4cbb70`
 
 **PASS — zero findings and zero untested claims.**
 
-Independent verification opened the live product in fresh desktop and phone
-contexts, completed the isolated sample workflow, ran every declared claim,
-and checked the full local and live matrix. No product code, product data,
-deployment, or infrastructure was changed.
+Fresh review opened the live product in desktop and phone contexts, completed
+the isolated sample workflow, ran every declared claim from a clean clone, and
+checked the local and live matrix. No product code, product data, deployment,
+or infrastructure was changed.
 
-The full evidence and earlier-finding disposition are in
-`.factory/verification-13.md`.
+The full evidence and disposition of every earlier review/verification finding
+are in `.factory/review-3.md`.
 
 ## Verified behavior
 
-- The first screen states the job, audience, first action, and three required facts before scrolling.
-- One-click demo entry loads five realistic groups with a persistent label, search, review state, digest, CSV/JSON export, reset, and a clean exit to real mode.
-- Demo requests use only disposable demo endpoints and do not touch operator data.
-- All 21 declared claim commands pass individually from a clean clone.
-- `npm test`, TypeScript, Rust format, strict Clippy, frontend/release builds, and mobile/desktop E2E all pass.
-- Live desktop, 390 px phone, keyboard, focus, reduced motion, 200% reflow, offline reload, legal routes, links, route titles, and designed 404 pass.
-- Local normal, invalid, boundary, grouped-ingest, restart-persistence, authentication, privacy, retention, and recovery paths pass.
-- Live health identifies the deployed SHA. A 120-request burst returns 429 with `Retry-After` and recovers after refill.
-- Live and stamped local HTML/JS/CSS bytes match.
-- Fresh live Lighthouse is 100/100/100/100; LCP 1.65 s, CLS 0, TBT 0 ms, and transfer 120,425 bytes.
+- The first screen states the job, audience, first action, and privacy/offline/free facts before scrolling.
+- One-click demo has five realistic groups, a persistent label, valid CSV export, reset recovery, same-origin requests, and offline reload.
+- All 21 exact declared claim commands pass individually from a clean clone.
+- `npm test`, TypeScript, Rust format, strict Clippy, SHA-stamped builds, and both mobile/desktop E2E pass.
+- Live Axe desktop/phone/demo/404 scans, keyboard skip link, reduced motion, legal routes, links, titles, and designed 404 pass.
+- Normal, invalid, boundary, recovery, signature/redaction, isolation, and restart-persistence paths pass locally.
+- A 140-request live anonymous management burst returned 15×429, each with `Retry-After: 1`; it recovered to 401 after refill.
+- Fresh live Lighthouse is 100/100/100/100; LCP 1.65 s, CLS 0, TBT 0 ms, and transfer 120,782 bytes.
 
 ## Run and verify
 
